@@ -1,0 +1,22 @@
+{
+  "name": "loot-survivor-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@cartridge/controller": "^0.13.9",
+    "@cartridge/controller-wasm": "0.9.4",
+    "@scure/starknet": "^2.0.0",
+    "dotenv": "^16.4.7",
+    "starknet": "8.5.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}
