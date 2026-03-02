@@ -4,8 +4,8 @@ import { decideCombat } from "./combat.js";
 import { allocateStats } from "./stats.js";
 import { decideMarketPurchases } from "./market.js";
 import { suggestGearSwap } from "./gear.js";
-import { calculateLevel, maxHealth } from "../utils/math.js";
-import { simulateCombat } from "./combat-sim.js";
+import { maxHealth } from "../utils/math.js";
+import { getBeastTier } from "../utils/beast-utils.js";
 import { log } from "../utils/logger.js";
 
 /**
@@ -71,49 +71,46 @@ function decideBattleAction(
   }
 
   // Attempt gear swap on first round of a new beast encounter.
-  // Only swap if current win rate is low (< 70%) — if we're already winning,
-  // don't waste HP on a counter-attack from equipping.
+  // Always check for the best weapon matchup — gear.ts effectiveDamageScore
+  // ensures we only swap when meaningfully better (not for marginal gains).
   if (!gearSwapDone && bag.items.length > 0) {
     gearSwapDone = true;
 
-    // Check current win rate before considering a swap
-    const preSwapSim = simulateCombat(adventurer, beast);
+    const gearResult = suggestGearSwap(adventurer, bag, beast);
 
-    if (preSwapSim.winRate < 0.70) {
-      const gearResult = suggestGearSwap(adventurer, bag, beast);
+    if (gearResult.hasSwaps) {
+      // Estimate whether we can absorb the beast counter-attack from equipping.
+      // Beast damage = level * (6 - tier). Crits double it, elemental advantage = 1.5x.
+      // Use conservative estimate: base damage * 2 (assume crit) * 1.5 (assume advantage).
+      // Game #207649 died at L7 from a gear swap because old estimate (level*2=14) was
+      // absurdly low — actual hit was 100+ damage.
+      const beastTier = beast.tier || getBeastTier(beast.id);
+      const beastBaseAttack = beast.level * (6 - beastTier);
+      const roughBeastDmg = Math.max(10, Math.ceil(beastBaseAttack * 2 * 1.5));
+      const hpAfterCounterAttack = adventurer.health - roughBeastDmg;
+      const mHealth = maxHealth(adventurer.stats.vitality);
+      const hpThreshold = mHealth * 0.3;
 
-      if (gearResult.hasSwaps) {
-        // Estimate whether we can absorb the beast counter-attack from equipping.
-        const roughBeastDmg = Math.max(5, beast.level * 2);
-        const hpAfterCounterAttack = adventurer.health - roughBeastDmg;
-        const mHealth = maxHealth(adventurer.stats.vitality);
-        const hpThreshold = mHealth * 0.3;
-
-        if (hpAfterCounterAttack > hpThreshold) {
-          const itemIds = gearResult.swaps.equipItemIds;
-          log.combat(
-            `Swapping gear for beast matchup: equipping [${itemIds.join(", ")}] ` +
-            `(win rate ${(preSwapSim.winRate * 100).toFixed(0)}% too low, swap may flip it) - ${gearResult.swaps.reason}`
-          );
-          // Equipping during battle triggers a beast counter-attack which needs VRF
-          const vrfCall = calls.requestRandomForBattle(gameId, adventurer.xp, adventurer.action_count);
-          return {
-            action: `equip([${itemIds.join(", ")}])`,
-            reason: `Gear swap for beast matchup: ${gearResult.swaps.reason} ` +
-              `(win rate ${(preSwapSim.winRate * 100).toFixed(0)}%, HP ${adventurer.health}/${mHealth})`,
-            calls: [vrfCall, calls.equip(gameId, itemIds)],
-          };
-        } else {
-          log.combat(
-            `Skipping gear swap - HP too low to absorb counter-attack ` +
-            `(HP: ${adventurer.health}, est. beast dmg: ${roughBeastDmg}, threshold: ${hpThreshold.toFixed(0)})`
-          );
-        }
+      if (hpAfterCounterAttack > hpThreshold) {
+        const itemIds = gearResult.swaps.equipItemIds;
+        log.combat(
+          `Swapping gear for beast matchup: equipping [${itemIds.join(", ")}] ` +
+          `- ${gearResult.swaps.reason}`
+        );
+        // Equipping during battle triggers a beast counter-attack which needs VRF
+        const vrfCall = calls.requestRandomForBattle(gameId, adventurer.xp, adventurer.action_count);
+        return {
+          action: `equip([${itemIds.join(", ")}])`,
+          reason: `Gear swap for beast matchup: ${gearResult.swaps.reason} ` +
+            `(HP ${adventurer.health}/${mHealth})`,
+          calls: [vrfCall, calls.equip(gameId, itemIds)],
+        };
+      } else {
+        log.combat(
+          `Skipping gear swap - HP too low to absorb counter-attack ` +
+          `(HP: ${adventurer.health}, est. beast dmg: ${roughBeastDmg}, threshold: ${hpThreshold.toFixed(0)})`
+        );
       }
-    } else {
-      log.combat(
-        `Skipping gear swap - already winning (${(preSwapSim.winRate * 100).toFixed(0)}% win rate)`
-      );
     }
   }
 
@@ -137,23 +134,13 @@ function decideBattleAction(
 }
 
 /**
- * Decide explore action with dynamic strategy based on HP, level, and stats.
+ * Decide explore action — always single-step (till_beast=false).
  *
- * CRITICAL: Stay above 100 HP at all times.
- *
- * till_beast=true chains multiple exploration steps in one TX. This is
- * efficient but dangerous: each step can trigger obstacles (INT-based)
- * and ambushes (WIS-based). Game 206426 died from full HP at L10 with
- * WIS=2 INT=2 — cumulative ambush/obstacle damage over ~5 steps = death.
- *
- * Strategy:
- * - Level <= 3: till_beast=true (low damage, need to progress fast)
- * - HP > 100 AND HP > 70% AND adequate WIS/INT: till_beast=true
- * - Otherwise: till_beast=false (single explore, re-evaluate each step)
- *
- * "Adequate WIS/INT" means both WIS >= level*0.4 AND INT >= level*0.4.
- * At L10 this requires WIS >= 4, INT >= 4 — enough to avoid ~40% of
- * ambushes/obstacles, making chained explores survivable.
+ * till_beast=true chains multiple exploration steps in one TX with zero
+ * chance to heal between hits. Game 206426 died 130→0 HP in one TX.
+ * Single-step exploring lets the main loop buy potions between each step.
+ * The ~2s extra per step is negligible compared to the safety benefit.
+ * NEVER use till_beast=true — finding gold between steps lets us buy potions.
  */
 function decideExploreAction(
   gameId: number,
@@ -161,42 +148,10 @@ function decideExploreAction(
   calls: CallBuilders
 ): BotDecision {
   const vrfCall = calls.requestRandomForExplore(gameId, adventurer.xp);
-  const level = calculateLevel(adventurer.xp);
   const mHealth = maxHealth(adventurer.stats.vitality);
-  const hpPercent = adventurer.health / mHealth;
-  const MIN_HP_TARGET = 100;
-  const wis = adventurer.stats.wisdom;
-  const int_ = adventurer.stats.intelligence;
 
-  // Exploration protection check: can we safely chain multiple explores?
-  const wisThreshold = Math.ceil(level * 0.4);
-  const intThreshold = Math.ceil(level * 0.4);
-  const hasExplorationProtection = wis >= wisThreshold && int_ >= intThreshold;
-
-  let tillBeast: boolean;
-  let reason: string;
-
-  if (level <= 3) {
-    // Early game: rush to progress (obstacles/ambushes are weak)
-    tillBeast = true;
-    reason = `Early game (level ${level}), exploring till beast for fast progression`;
-  } else if (adventurer.health > MIN_HP_TARGET && hpPercent > 0.7 && hasExplorationProtection) {
-    // Healthy with adequate WIS/INT protection: safe to chain explores
-    tillBeast = true;
-    reason = `Healthy (HP: ${adventurer.health}/${mHealth}, ${(hpPercent * 100).toFixed(0)}%), WIS:${wis}≥${wisThreshold} INT:${int_}≥${intThreshold}, exploring till beast`;
-  } else if (adventurer.health > MIN_HP_TARGET && hpPercent > 0.7 && !hasExplorationProtection) {
-    // Healthy HP but low WIS/INT: single explore to avoid chained damage
-    tillBeast = false;
-    reason = `HP good (${adventurer.health}/${mHealth}) but WIS:${wis}<${wisThreshold} or INT:${int_}<${intThreshold} — single explore to avoid chained damage`;
-  } else if (adventurer.health > MIN_HP_TARGET) {
-    // Above 100 HP but below 70% max: cautious single explore
-    tillBeast = false;
-    reason = `Exploring cautiously (HP: ${adventurer.health}/${mHealth}, ${(hpPercent * 100).toFixed(0)}%, single explore for possible health discovery)`;
-  } else {
-    // Below 100 HP: very cautious single explore
-    tillBeast = false;
-    reason = `HP below 100 (HP: ${adventurer.health}/${mHealth}), single explore - health discoveries are critical`;
-  }
+  const tillBeast = false;
+  const reason = `Exploring single step (HP: ${adventurer.health}/${mHealth}) — heal between encounters`;
 
   log.explore(reason);
 

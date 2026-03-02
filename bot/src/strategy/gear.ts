@@ -77,22 +77,25 @@ function weaponMatchupScore(weaponId: number, beastArmorType: string): number {
 
 /**
  * Compute a relative effective damage score for a weapon against a beast.
- * Combines tier multiplier (6 - tier) with element multiplier.
+ * Combines greatness, tier multiplier (6 - tier), and element multiplier.
  *
- * Examples:
- *   T1 weak:    (6-1) * 0.5 = 2.5
- *   T1 neutral: (6-1) * 1.0 = 5.0
- *   T1 strong:  (6-1) * 1.5 = 7.5
- *   T5 neutral: (6-5) * 1.0 = 1.0
- *   T5 strong:  (6-5) * 1.5 = 1.5
+ * The actual damage formula is: baseAttack = weaponLevel × (6 - tier)
+ * where weaponLevel = greatness = floor(sqrt(xp)).
  *
- * This prevents swapping a T1 weak weapon for a T5 neutral — the T1 still
- * does 2.5x more effective damage.
+ * Including greatness prevents catastrophic swaps like:
+ *   G18 T1 neutral: 18 * 5 * 1.0 = 90   (keep!)
+ *   G3  T1 strong:   3 * 5 * 1.5 = 22.5  (don't swap to this)
+ *
+ * Swaps only happen when backup has both good greatness AND type advantage:
+ *   G18 T1 weak:   18 * 5 * 0.5 = 45
+ *   G15 T1 strong: 15 * 5 * 1.5 = 112.5  (swap — similar greatness, better matchup)
  */
-function effectiveDamageScore(tier: number, matchupScore: number): number {
+function effectiveDamageScore(tier: number, matchupScore: number, greatness: number): number {
   const tierMult = 6 - tier; // T1=5, T2=4, ..., T5=1
   const elemMult = matchupScore > 0 ? 1.5 : matchupScore < 0 ? 0.5 : 1.0;
-  return tierMult * elemMult;
+  // Greatness scales linearly with base damage (weaponLevel × tierMult)
+  // Use max(1, greatness) to avoid zero for brand-new items
+  return Math.max(1, greatness) * tierMult * elemMult;
 }
 
 // ─── Core Functions ──────────────────────────────────────────────────────────
@@ -126,7 +129,7 @@ export function suggestGearSwap(
     // Only consider swapping if current weapon isn't close to suffix unlock
     if (currentGreatness < HIGH_GREATNESS_THRESHOLD) {
       let bestCandidate: Item | null = null;
-      let bestEffective = effectiveDamageScore(currentTier, currentScore);
+      let bestEffective = effectiveDamageScore(currentTier, currentScore, currentGreatness);
 
       for (const bagItem of bag.items) {
         if (!ItemUtils.isWeapon(bagItem.id)) continue;
@@ -140,7 +143,7 @@ export function suggestGearSwap(
 
         // Compare effective damage: tier * element multiplier
         // A T1 with disadvantage (5*0.5=2.5) beats T5 neutral (1*1.0=1.0)
-        const bagEffective = effectiveDamageScore(bagTier, bagScore);
+        const bagEffective = effectiveDamageScore(bagTier, bagScore, bagGreatness);
         if (bagEffective > bestEffective) {
           bestCandidate = bagItem;
           bestEffective = bagEffective;

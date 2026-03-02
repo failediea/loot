@@ -6,7 +6,7 @@ import {
   NECKLACE_ARMOR_BONUS,
   BASE_DAMAGE_REDUCTION_PCT,
 } from "../constants/game.js";
-import type { Adventurer, Beast, DamageResult, Equipment, Item } from "../types.js";
+import type { Adventurer, Beast, DamageResult, Item } from "../types.js";
 import { getBeastArmorType, getBeastAttackType, getBeastTier } from "./beast-utils.js";
 import { ItemType, ItemUtils, neckMatchesArmor } from "./item-utils.js";
 import { calculateLevel } from "./math.js";
@@ -119,39 +119,6 @@ export function calculateBeastDamage(beast: Beast, adventurer: Adventurer, armor
   return {
     baseDamage: Math.max(BEAST_MIN_DAMAGE, baseDamage),
     criticalDamage: Math.max(BEAST_MIN_DAMAGE, critDamage),
-  };
-}
-
-/**
- * Calculate average expected beast damage across all 5 armor slots (20% chance each).
- * Uses luck-based crit probability for weighted expected damage.
- */
-export function calculateAverageBeastDamage(
-  beast: Beast,
-  adventurer: Adventurer,
-  adventurerLevel?: number
-): { expected: number; max: number } {
-  const slots: (keyof Equipment)[] = ["chest", "head", "waist", "foot", "hand"];
-  const neck = adventurer.equipment.neck;
-  let totalExpected = 0;
-  let maxDmg = 0;
-
-  // Beast crit chance = adventurer_level% (capped at 100%)
-  const level = adventurerLevel ?? 1;
-  const beastCritChance = Math.min(level / 100, 1.0);
-
-  for (const slot of slots) {
-    const armor = adventurer.equipment[slot];
-    const { baseDamage, criticalDamage } = calculateBeastDamage(beast, adventurer, armor, neck);
-    // Weighted expected damage accounting for crit probability
-    const slotExpected = baseDamage * (1 - beastCritChance) + criticalDamage * beastCritChance;
-    totalExpected += slotExpected;
-    maxDmg = Math.max(maxDmg, criticalDamage);
-  }
-
-  return {
-    expected: totalExpected / 5,
-    max: maxDmg,
   };
 }
 

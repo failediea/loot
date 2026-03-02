@@ -20,8 +20,14 @@ dependencies:
   starknet:
     specifier: 8.5.2
     version: 8.5.2
+  ws:
+    specifier: ^8.18.0
+    version: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
 devDependencies:
+  '@types/ws':
+    specifier: ^8.5.0
+    version: 8.18.1
   tsx:
     specifier: ^4.19.2
     version: 4.21.0
@@ -2030,7 +2036,7 @@ packages:
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
     requiresBuild: true
     dependencies:
-      '@types/node': 12.20.55
+      '@types/node': 25.3.2
     dev: false
     optional: true
 
@@ -2051,8 +2057,6 @@ packages:
     requiresBuild: true
     dependencies:
       undici-types: 7.18.2
-    dev: false
-    optional: true
 
   /@types/react@19.2.14:
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
@@ -2074,7 +2078,7 @@ packages:
     resolution: {integrity: sha512-JQbbmxZTZehdc2iszGKs5oC3NFnjeay7mtAWrdt7qNtAVK0g19muApzAy4bm9byz79xa2ZnO/BOBC2R8RC5Lww==}
     requiresBuild: true
     dependencies:
-      '@types/node': 12.20.55
+      '@types/node': 25.3.2
     dev: false
     optional: true
 
@@ -2083,8 +2087,6 @@ packages:
     requiresBuild: true
     dependencies:
       '@types/node': 25.3.2
-    dev: false
-    optional: true
 
   /@wallet-standard/base@1.1.0:
     resolution: {integrity: sha512-DJDQhjKmSNVLKWItoKThJS+CsJQjR9AOBOirBVT1F9YpRyC9oYHE+ZnSf8y8bxUphtKqdQMPVQ2mHohYdRvDVQ==}
@@ -2922,7 +2924,6 @@ packages:
     dependencies:
       node-gyp-build: 4.8.4
     dev: false
-    optional: true
 
   /bundle-name@4.1.0:
     resolution: {integrity: sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q==}
@@ -3741,7 +3742,6 @@ packages:
     hasBin: true
     requiresBuild: true
     dev: false
-    optional: true
 
   /node-mock-http@1.0.4:
     resolution: {integrity: sha512-8DY+kFsDkNXy1sJglUfuODx1/opAGJGyrTuFqEoN90oRc2Vk0ZbD4K2qmKXBBEhZQzdKHIVfEJpDU8Ak2NJEvQ==}
@@ -4224,8 +4224,6 @@ packages:
   /undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
     requiresBuild: true
-    dev: false
-    optional: true
 
   /undici-types@7.22.0:
     resolution: {integrity: sha512-RKZvifiL60xdsIuC80UY0dq8Z7DbJUV8/l2hOVbyZAxBzEeQU4Z58+4ZzJ6WN2Lidi9KzT5EbiGX+PI/UGYuRw==}
@@ -4318,7 +4316,6 @@ packages:
     dependencies:
       node-gyp-build: 4.8.4
     dev: false
-    optional: true
 
   /uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
@@ -4502,7 +4499,6 @@ packages:
       bufferutil: 4.1.0
       utf-8-validate: 5.0.10
     dev: false
-    optional: true
 
   /wsl-utils@0.1.0:
     resolution: {integrity: sha512-h3Fbisa2nKGPxCpm89Hk33lBLsnaGBvctQopaBSOW/uIs6FTe1ATyAnKFJrzVs9vpGdsTe73WF3V4lIsk4Gacw==}

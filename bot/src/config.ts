@@ -14,9 +14,9 @@ export interface BotConfig {
   ekuboRouterAddress: string;
 }
 
-export function loadConfig(): BotConfig {
+export function loadConfig(accountAddress?: string): BotConfig {
   return {
-    accountAddress: "0x02eb8e6459a39d3ac8a2f52ab17084b259beed1f705c0cae9caae4cffe391d8e",
+    accountAddress: accountAddress || "0x02eb8e6459a39d3ac8a2f52ab17084b259beed1f705c0cae9caae4cffe391d8e",
     rpcUrl: process.env.STARKNET_RPC_URL || "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_9",
     chainId: "0x534e5f4d41494e",
     mode: (process.env.BOT_MODE as "single" | "continuous") || "single",

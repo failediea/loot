@@ -5,21 +5,38 @@
  * We intercept the cartridge_addExecuteOutsideTransaction fetch call and:
  * 1. Replace sig[2] with WILDCARD_ROOT
  * 2. Recompute OutsideExecution SNIP-12 hash (domain: version=2, revision=2)
- * 3. Re-sign sig[12]/sig[13] with poseidonSmall([oeHash, SESSION_HASH, 2n])[0]
+ * 3. Re-sign sig[12]/sig[13] with poseidonSmall([oeHash, wildcardSessionHash, 2n])[0]
  * 4. Replace proofs with empty [0x0]
  */
 import { addAddressPadding, hash } from "starknet";
 import { poseidonHashMany, poseidonSmall, sign as starkSign } from "@scure/starknet";
 import { log } from "../utils/logger.js";
 
-// Session credentials (exported for use by direct invoke)
-export const CONTROLLER = "0x02eb8e6459a39d3ac8a2f52ab17084b259beed1f705c0cae9caae4cffe391d8e";
-export const SESSION_PRIV = "0x6fb20ea6869285bdd60d58024081659cfefd6167c5a3941240fd4d72d67dbd4";
-const SESSION_HASH = "0x2740f7281f92da75ad1c838fd7794d8cacb1fc7cbb66efd19c0fe9f526a74f5";
-export const SESSION_KEY_GUID = "0x6932f6d78dccf32a90ba255a0fd3e59d3a87caf2410f0bac9885638da08b67d";
-export const WILDCARD_ROOT = "0x77696c64636172642d706f6c696379";
-export const OWNER_EIP191 = "0x5efc192b995c0bf39bf8ba332e230dfa7abd3283";
-export const SESSION_EXPIRES = 0x69aaeeb6;
+// Session credentials interface for multi-tenancy
+export interface SessionCredentials {
+  controller: string;
+  sessionPriv: string;
+  sessionKeyGuid: string;
+  wildcardRoot: string;     // always "0x77696c64636172642d706f6c696379"
+  ownerGuid: string;        // signer GUID of the account owner
+  sessionExpires: number;
+}
+
+export const DEFAULT_CREDENTIALS: SessionCredentials = {
+  controller: "0x02eb8e6459a39d3ac8a2f52ab17084b259beed1f705c0cae9caae4cffe391d8e",
+  sessionPriv: "0x6fb20ea6869285bdd60d58024081659cfefd6167c5a3941240fd4d72d67dbd4",
+  sessionKeyGuid: "0x6932f6d78dccf32a90ba255a0fd3e59d3a87caf2410f0bac9885638da08b67d",
+  wildcardRoot: "0x77696c64636172642d706f6c696379",
+  ownerGuid: "0x0208d82dc9fd6035abb03c6c0f28300032ce0585bea6cfae615e2b107ce8575e",
+  sessionExpires: 0x69aaeeb6,
+};
+
+// Backward-compatible individual exports from default credentials
+export const CONTROLLER = DEFAULT_CREDENTIALS.controller;
+export const SESSION_PRIV = DEFAULT_CREDENTIALS.sessionPriv;
+export const SESSION_KEY_GUID = DEFAULT_CREDENTIALS.sessionKeyGuid;
+export const WILDCARD_ROOT = DEFAULT_CREDENTIALS.wildcardRoot;
+export const SESSION_EXPIRES = DEFAULT_CREDENTIALS.sessionExpires;
 
 // SNIP-12 constants for OutsideExecution
 const DOMAIN_TYPE_HASH = 0x1ff2f602e42168014d405a94f75e8a93d640751d71d16311266e140d8b0a210n;
@@ -29,12 +46,51 @@ const OE_DOMAIN_NAME = BigInt("0x" + Buffer.from("Account.execute_from_outside")
 const STARKNET_MESSAGE = BigInt("0x" + Buffer.from("StarkNet Message").toString("hex"));
 const OE_CHAIN_ID = 0x534e5f4d41494en;
 
+/**
+ * Compute the wildcard session hash (SNIP-12 typed data hash).
+ *
+ * Session struct hash = poseidonHashMany([TYPE_HASH, expires_at, wildcard_root, metadata_hash, session_key_guid, guardian_key_guid])
+ * Domain struct hash = poseidonHashMany([DOMAIN_TYPE_HASH, name, version, chain_id, revision])
+ * Message hash = poseidonHashMany(["StarkNet Message", domain_hash, controller_address, session_struct_hash])
+ */
+export function computeWildcardSessionHash(chainId: string, controllerAddress: string, creds?: SessionCredentials): bigint {
+  const cr = creds || DEFAULT_CREDENTIALS;
+  const sessionTypeHashStr = '"Session"("Expires At":"timestamp","Allowed Methods":"merkletree","Metadata":"string","Session Key":"felt")';
+  const sessionTypeHash = BigInt(hash.getSelectorFromName(sessionTypeHashStr));
+
+  const sessionStructHash = poseidonHashMany([
+    sessionTypeHash,
+    BigInt(cr.sessionExpires),
+    BigInt(cr.wildcardRoot),
+    0n,                            // metadata_hash
+    BigInt(cr.sessionKeyGuid),
+    0n,                            // guardian_key_guid
+  ]);
+
+  const domainTypeHashStr = '"StarknetDomain"("name":"shortstring","version":"shortstring","chainId":"shortstring","revision":"shortstring")';
+  const domainTypeHash = BigInt(hash.getSelectorFromName(domainTypeHashStr));
+  const domainName = BigInt("0x" + Buffer.from("SessionAccount.session").toString("hex"));
+  const domainVersion = BigInt("0x" + Buffer.from("1").toString("hex"));
+
+  const domainStructHash = poseidonHashMany([
+    domainTypeHash, domainName, domainVersion,
+    BigInt(chainId),
+    1n,                            // revision
+  ]);
+
+  const starknetMessage = BigInt("0x" + Buffer.from("StarkNet Message").toString("hex"));
+
+  return poseidonHashMany([
+    starknetMessage, domainStructHash, BigInt(controllerAddress), sessionStructHash,
+  ]);
+}
+
 // State captured from intercepted fetch responses
 let lastTxHash: string | null = null;
 let lastTxError: string | null = null;
 const origFetch = globalThis.fetch;
 
-function computeOutsideExecHash(oe: any): string {
+function computeOutsideExecHash(oe: any, controllerAddress: string): string {
   const callHashes = oe.calls.map((c: any) => {
     const cdHash = poseidonHashMany(c.calldata.length > 0 ? c.calldata.map(BigInt) : []);
     return poseidonHashMany([CALL_TYPE_HASH, BigInt(c.to), BigInt(c.selector), cdHash]);
@@ -46,14 +102,16 @@ function computeOutsideExecHash(oe: any): string {
     BigInt(oe.execute_after), BigInt(oe.execute_before), callsHash,
   ]);
   const domainHash = poseidonHashMany([DOMAIN_TYPE_HASH, OE_DOMAIN_NAME, 2n, OE_CHAIN_ID, 2n]);
-  return "0x" + poseidonHashMany([STARKNET_MESSAGE, domainHash, BigInt(CONTROLLER), structHash]).toString(16);
+  return "0x" + poseidonHashMany([STARKNET_MESSAGE, domainHash, BigInt(controllerAddress), structHash]).toString(16);
 }
 
 /**
  * Install the fetch interceptor and WASM crash handler.
  * Must be called once at startup before any session operations.
  */
-export function installSessionInterceptor(): void {
+export function installSessionInterceptor(creds?: SessionCredentials): void {
+  const c = creds || DEFAULT_CREDENTIALS;
+
   // Handle WASM crashes: after successful tx submission, WASM throws "url parse"
   process.on('uncaughtException', (err) => {
     if (err.message === 'url parse') return;
@@ -74,17 +132,18 @@ export function installSessionInterceptor(): void {
       const sig = parsed.params.signature;
       const oe = parsed.params.outside_execution;
 
-      if (sig && sig[0] === "0x73657373696f6e2d746f6b656e" && sig[2] !== WILDCARD_ROOT) {
+      if (sig && sig[0] === "0x73657373696f6e2d746f6b656e" && sig[2] !== c.wildcardRoot) {
         // 1. Replace policies root with wildcard
-        sig[2] = WILDCARD_ROOT;
+        sig[2] = c.wildcardRoot;
 
         // 2. Compute OE message hash
-        const oeHash = computeOutsideExecHash(oe);
+        const oeHash = computeOutsideExecHash(oe, c.controller);
 
         // 3. Compute signing hash and re-sign
-        const hadesResult = poseidonSmall([BigInt(oeHash), BigInt(SESSION_HASH), 2n]);
+        const wildcardSH = computeWildcardSessionHash("0x534e5f4d41494e", c.controller, c);
+        const hadesResult = poseidonSmall([BigInt(oeHash), wildcardSH, 2n]);
         const signingHash = "0x" + hadesResult[0].toString(16);
-        const newSig = starkSign(signingHash, SESSION_PRIV);
+        const newSig = starkSign(signingHash, c.sessionPriv);
         sig[12] = "0x" + newSig.r.toString(16);
         sig[13] = "0x" + newSig.s.toString(16);
 
@@ -156,9 +215,10 @@ const CARTRIDGE_RPC = "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_9";
  * Always uses the Cartridge RPC for tx submission regardless of the
  * configured state-read RPC (Lava, etc).
  */
-export async function createSessionAccount(_rpcUrl: string, chainId: string): Promise<any> {
-  const { CartridgeSessionAccount, signerToGuid } = await loadWasm();
-  const ownerGuid = signerToGuid({ eip191: { address: OWNER_EIP191 } });
+export async function createSessionAccount(_rpcUrl: string, chainId: string, creds?: SessionCredentials): Promise<any> {
+  const c = creds || DEFAULT_CREDENTIALS;
+  const { CartridgeSessionAccount } = await loadWasm();
+  const ownerGuid = c.ownerGuid;
 
   // Policies: all game methods + VRF. The specific policies don't matter
   // because the interceptor replaces with wildcard root, but the WASM
@@ -193,13 +253,13 @@ export async function createSessionAccount(_rpcUrl: string, chainId: string): Pr
   ];
 
   return CartridgeSessionAccount.newAsRegistered(
-    CARTRIDGE_RPC, SESSION_PRIV, addAddressPadding(CONTROLLER), ownerGuid, chainId,
+    CARTRIDGE_RPC, c.sessionPriv, addAddressPadding(c.controller), ownerGuid, chainId,
     {
-      expiresAt: SESSION_EXPIRES,
+      expiresAt: c.sessionExpires,
       policies,
       guardianKeyGuid: "0x0",
       metadataHash: "0x0",
-      sessionKeyGuid: SESSION_KEY_GUID,
+      sessionKeyGuid: c.sessionKeyGuid,
     }
   );
 }
@@ -208,4 +268,4 @@ export function getLastTxHash(): string | null { return lastTxHash; }
 export function getLastTxError(): string | null { return lastTxError; }
 export function resetTxState(): void { lastTxHash = null; lastTxError = null; }
 export function getOrigFetch(): typeof fetch { return origFetch; }
-export function getControllerAddress(): string { return CONTROLLER; }
+export function getControllerAddress(creds?: SessionCredentials): string { return (creds || DEFAULT_CREDENTIALS).controller; }

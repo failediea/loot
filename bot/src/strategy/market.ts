@@ -1,8 +1,9 @@
-import { POTION_HEAL_AMOUNT } from "../constants/game.js";
+import { POTION_HEAL_AMOUNT, MAX_BAG_SIZE } from "../constants/game.js";
 import type { Adventurer, Bag, ItemPurchase, MarketItem } from "../types.js";
-import { ItemUtils, ItemType, getItemSuffix, getSuffixStatBonus, getArmorMaterialFamily } from "../utils/item-utils.js";
+import { ItemUtils, ItemType, getItemSuffix, getSuffixStatBonus, getArmorMaterialFamily, neckMatchesArmor } from "../utils/item-utils.js";
 import { calculateLevel, maxHealth } from "../utils/math.js";
 import { log } from "../utils/logger.js";
+import { dashboard } from "../dashboard/events.js";
 
 interface ShoppingDecision {
   potions: number;
@@ -34,24 +35,26 @@ function xpForGreatness(greatness: number): number {
 /**
  * Decide what to buy from the market.
  *
- * Priority order (greatness-first, potion-heavy):
- * 0. Priority potions (reach 100 HP first)
- * 1. Weapon upgrade (T1=5x damage vs T5=1x — get T1 ASAP, then never replace)
- * 2. Fill empty armor slots (cheapest available — then level them toward G20)
- * 3. Emergency potions (if HP still below 100)
- * 4. Ring (tier-aware selection based on build and greatness)
- * 5. Regular potions (heal up)
- * 6. Backup weapon (only once primary weapon reaches G20 for elemental coverage)
- * 7. Final potions
+ * Priority order (top-game strategy):
+ * 0. Priority potions (reach 100 HP)
+ * 1. Weapon upgrade (T1=5x damage vs T5=1x)
+ * 2. Fill empty armor slots (cheapest available)
+ * 2b. Armor ladder (T5→T1 at G20 only, T1 only — no T2 waste)
+ * 3. Emergency potions (if still below 100 HP)
+ * 4. Regular potions (heal to 70% max HP, only if missing 8+ HP)
+ * 5. Ring (Luck scaling)
+ * 5b. Necklace (Luck + armor bonus, grouped with ring)
+ * 6. Backup weapons (2nd T1 at L15+, 3rd at L25+)
+ * 7. Bag jewelry (extra rings/necklaces for Luck)
+ * 8. Final potions (spend remaining gold, only if missing 8+ HP)
  *
- * KEY INSIGHT: Items gain XP toward G15 (suffix +3 stats) and G20 (prefix
- * for 8x name-match damage). Replacing an item resets it to G1, destroying
- * all progress. Therefore:
- * - NO armor upgrades ever — keep starter armor and level it to G20
- * - NO necklace purchases — negligible damage reduction vs potion value
- * - Buy T1 weapon ONCE early, then never replace it
- * - Buy backup weapons only after primary weapon is fully maxed (G20)
- * - Spend all remaining gold on potions (10 HP each at 1g with CHA)
+ * KEY INSIGHTS from top-game analysis (L48-49 games):
+ * - Armor LADDER: T5→T2→T1 upgrades at G15 thresholds. Each tier change
+ *   resets to G1 but the new item grows a new suffix. T1 G15 = 75 armor
+ *   vs T5 G15 = 15 armor — 5x difference.
+ * - Jewelry accumulates Luck (sum of all jewelry greatness). 5 G20 items = 100 Luck.
+ * - 3 T1 weapons for full beast type coverage (Blade/Magic/Bludgeon).
+ * - Bag items gain XP passively — buy backup weapons early.
  */
 export function decideMarketPurchases(
   adventurer: Adventurer,
@@ -167,29 +170,23 @@ export function decideMarketPurchases(
 
   /**
    * Score an item for suffix-aware purchasing.
-   * Prefer items whose suffix grants STR/DEX/VIT.
-   * Penalizes purchases that would replace items near G15 suffix unlock.
+   * Equipped items get both suffix_boost + bag_boost from contracts.
+   * VIT and CHA suffixes are especially valuable:
+   * - VIT suffixes (Giant, Protection, Perfection, Fury) give HP even from bag
+   * - CHA suffixes (Twins, Fox, Titans, Rage, Fury) reduce potion costs even from bag
    */
-  function suffixScore(itemId: number, replacedItemXp?: number): number {
+  function suffixScore(itemId: number): number {
     if (adventurer.item_specials_seed === 0) return 0;
     const suffix = getItemSuffix(itemId, adventurer.item_specials_seed);
     if (!suffix) return 0;
     const bonus = getSuffixStatBonus(suffix);
     let score = 0;
     if (bonus.dexterity) score += bonus.dexterity * 3;
+    if (bonus.vitality) score += bonus.vitality * 3; // VIT = HP = survival
+    if (bonus.charisma) score += bonus.charisma * 2;  // CHA = cheap potions
     if (bonus.strength) score += bonus.strength * 2;
-    if (bonus.vitality) score += bonus.vitality * 2;
     if (bonus.wisdom) score += bonus.wisdom * 1;
-    if (bonus.charisma) score += bonus.charisma * 1;
-
-    // Penalize if the item being purchased would replace an item approaching G15
-    if (replacedItemXp !== undefined) {
-      const replacedGreatness = itemGreatness(replacedItemXp);
-      if (replacedGreatness >= 12) {
-        score -= 10;
-      }
-    }
-
+    if (bonus.intelligence) score += bonus.intelligence * 1;
     return score;
   }
 
@@ -197,11 +194,10 @@ export function decideMarketPurchases(
    * Check if replacing a current item is blocked by greatness considerations.
    * Returns true if the replacement should be blocked.
    *
-   * Rules:
-   * - If currentGreatness >= 15 (suffix active), only replace with same-tier-or-better
-   *   (but we never have high-greatness market items, so effectively block)
-   * - If currentGreatness >= 12 (close to unlock), don't replace unless new item
-   *   is 2+ tiers better
+   * Simple rule: NEVER replace unless the item is at G20 (maxed) AND the
+   * replacement is T1. Items grow toward G20 for max armor + suffix bonuses.
+   * Even bag items give VIT/CHA bonuses from suffixes, so replaced items
+   * should go to bag (handled by armor ladder step).
    */
   function shouldBlockReplacement(
     currentItemId: number,
@@ -212,25 +208,19 @@ export function decideMarketPurchases(
     const currentGreatness = itemGreatness(currentItemXp);
     const currentTier = ItemUtils.getItemTier(currentItemId);
     const currentName = ItemUtils.getItemName(currentItemId);
-    const tierImprovement = currentTier - newItemTier; // positive = new item is better tier
 
-    if (currentGreatness >= 15) {
-      // Suffix is active -- only replace with same-tier-or-better that we already own
-      // with high greatness (market items are always G1, so block)
-      log.shop(`Keeping G${currentGreatness} T${currentTier} ${currentName} — suffix active, market items are G1`);
+    // Only replace at G20 (maxed) with T1
+    if (currentGreatness < 20) {
+      log.shop(`Keeping G${currentGreatness} T${currentTier} ${currentName} — riding to G20`);
       return true;
     }
 
-    if (currentGreatness >= 12) {
-      const xpNeeded = xpForGreatness(15) - currentItemXp;
-      if (tierImprovement < 2) {
-        log.shop(`Keeping G${currentGreatness} T${currentTier} ${currentName} — almost at suffix unlock (needs ${currentItemXp}→${xpForGreatness(15)} XP, ${xpNeeded} more)`);
-        return true;
-      }
-      // 2+ tier improvement is worth it even near suffix unlock
-      log.shop(`Replacing G${currentGreatness} T${currentTier} ${currentName} — ${tierImprovement} tier improvement outweighs suffix proximity`);
+    if (newItemTier > 1) {
+      log.shop(`Keeping G${currentGreatness} T${currentTier} ${currentName} — only replace with T1`);
+      return true;
     }
 
+    // G20 + T1 replacement = go ahead
     return false;
   }
 
@@ -249,7 +239,7 @@ export function decideMarketPurchases(
     .sort((a, b) => {
       // Best tier first, then suffix score
       if (a.tier !== b.tier) return a.tier - b.tier;
-      return suffixScore(b.id, currentWeapon.xp) - suffixScore(a.id, currentWeapon.xp);
+      return suffixScore(b.id) - suffixScore(a.id);
     });
 
   if (weaponUpgrades.length > 0) {
@@ -295,16 +285,16 @@ export function decideMarketPurchases(
           !items.some((p) => p.item_id === item.id)
         )
         .sort((a, b) => {
-          // Cheapest first — save gold for potions and other upgrades
-          if (a.price !== b.price) return a.price - b.price;
-          // Tiebreak: prefer committed material
+          // STRONGLY prefer committed material — full set = consistent beast defense
           const aMat = getArmorMaterialFamily(a.id);
           const bMat = getArmorMaterialFamily(b.id);
           if (committedMaterial) {
-            if (aMat === committedMaterial && bMat !== committedMaterial) return -1;
-            if (bMat === committedMaterial && aMat !== committedMaterial) return 1;
+            const aMatch = aMat === committedMaterial ? 1 : 0;
+            const bMatch = bMat === committedMaterial ? 1 : 0;
+            if (aMatch !== bMatch) return bMatch - aMatch; // matching material first
           }
-          return 0;
+          // Then cheapest
+          return a.price - b.price;
         });
 
       if (candidates.length > 0 && candidates[0].price <= gold && (gold - candidates[0].price) >= minGoldReserve) {
@@ -312,6 +302,58 @@ export function decideMarketPurchases(
         items.push({ item_id: item.id, equip: true });
         gold -= item.price;
         log.shop(`Fill ${slot}: ${item.name} T${item.tier} for ${item.price}g`);
+      }
+    }
+  }
+
+  // ── STEP 2b: Armor ladder — upgrade G20 (maxed) armor to better tier ──
+  // Top games follow T5→T1 upgrade path, but ONLY when the item is fully maxed:
+  // - G20 is max greatness. No more growth — time to replace with a better tier.
+  // - Swapping at G15 is wasteful: the item still has 5 levels of growth,
+  //   and the new G1 piece has LESS armor than the old G15 piece initially.
+  // - Only buy T1 replacements. T2 is not worth the gold — save for T1.
+  // T1 G20 = (6-1)*20 = 100 armor vs T5 G20 = 20 armor — 5x difference.
+  {
+    for (const slot of armorSlots) {
+      const equipKey = slotToEquipKey[slot];
+      const currentItem = adventurer.equipment[equipKey];
+
+      if (currentItem.id === 0) continue; // Empty — handled by fill step
+      const currentTier = ItemUtils.getItemTier(currentItem.id);
+      if (currentTier <= 1) continue; // Already T1, nothing to upgrade
+
+      const currentGreatness = itemGreatness(currentItem.xp);
+      if (currentGreatness < 20) continue; // Wait until MAXED — don't waste growth
+
+      // Only buy T1 — T2/T3 aren't worth the gold investment
+      const upgrades = marketItems
+        .filter(item =>
+          item.slot === slot &&
+          item.tier === 1 &&
+          !items.some(p => p.item_id === item.id)
+        )
+        .sort((a, b) => {
+          // Tiebreak: prefer committed material
+          if (committedMaterial) {
+            const aMat = getArmorMaterialFamily(a.id);
+            const bMat = getArmorMaterialFamily(b.id);
+            if (aMat === committedMaterial && bMat !== committedMaterial) return -1;
+            if (bMat === committedMaterial && aMat !== committedMaterial) return 1;
+          }
+          return 0;
+        });
+
+      if (upgrades.length > 0) {
+        const upgrade = upgrades[0];
+        const armorReserve = Math.min(minGoldReserve, potionCost * 3);
+        if (upgrade.price <= gold && (gold - upgrade.price) >= armorReserve) {
+          items.push({ item_id: upgrade.id, equip: true });
+          gold -= upgrade.price;
+          log.shop(
+            `ARMOR LADDER: ${slot} ${upgrade.name} T${upgrade.tier} for ${upgrade.price}g ` +
+            `(was T${currentTier} G${currentGreatness} — maxed out, upgrading to T1)`
+          );
+        }
       }
     }
   }
@@ -335,7 +377,44 @@ export function decideMarketPurchases(
     }
   }
 
-  // ── STEP 4: Ring (tier-aware selection based on build and greatness) ──
+  // ── STEP 4: Regular potions — heal BEFORE buying luxury items like rings ──
+  // Only buy if missing at least 8 HP (80% of a potion's 10hp heal).
+  {
+    const currentHp = adventurer.health + potions * POTION_HEAL_AMOUNT;
+    const MIN_DEFICIT_FOR_POTIONS = Math.ceil(POTION_HEAL_AMOUNT * 0.8); // 8 HP
+    if (currentHp < mhp && (mhp - currentHp) >= MIN_DEFICIT_FOR_POTIONS && gold >= potionCost) {
+      const targetHp = Math.min(Math.max(MIN_HP_TARGET, Math.floor(mhp * 0.7)), mhp);
+      const healthNeeded = targetHp - currentHp;
+
+      if (healthNeeded > 0) {
+        const potionsNeeded = Math.ceil(healthNeeded / POTION_HEAL_AMOUNT);
+
+        // Budget: be generous — potions keep us alive
+        let goldForPotions: number;
+        if (currentHp < MIN_HP_TARGET) {
+          goldForPotions = Math.floor(gold * 0.9); // Below 100 HP: spend almost everything
+        } else if (potionCost <= 1) {
+          goldForPotions = Math.max(0, gold - 4); // 1g potions: spend almost everything
+        } else if (currentHp < mhp * 0.7) {
+          goldForPotions = Math.floor(gold * 0.7);
+        } else {
+          goldForPotions = Math.floor(gold * 0.5);
+        }
+
+        const affordablePotions = Math.floor(goldForPotions / potionCost);
+        const buyPotions = Math.min(potionsNeeded, affordablePotions);
+        if (buyPotions > 0) {
+          potions += buyPotions;
+          gold -= buyPotions * potionCost;
+          const newHp = Math.min(adventurer.health + potions * POTION_HEAL_AMOUNT, mhp);
+          log.shop(`Potions: ${buyPotions} for ${buyPotions * potionCost}g (HP: ${adventurer.health}→${newHp}/${mhp}, ${potionCost}g each, target ${targetHp})`);
+        }
+      }
+    }
+  }
+
+  // ── STEP 5: Ring (tier-aware selection based on build and greatness) ──
+  // Runs AFTER potions — staying alive is more important than Luck scaling.
   {
     const currentRing = adventurer.equipment.ring;
     const ringSlotEmpty = currentRing.id === 0;
@@ -385,57 +464,46 @@ export function decideMarketPurchases(
     }
   }
 
-  // ── STEP 5: Regular potions — target 100 HP minimum, then heal toward max ──
+  // ── STEP 5b: Fill necklace slot ──
+  // Necklaces contribute to Luck (greatness sum) and provide +3% armor bonus
+  // when type matches armor material. Grouped with ring (jewelry).
   {
-    const currentHp = adventurer.health + potions * POTION_HEAL_AMOUNT;
-    if (currentHp < mhp && gold >= potionCost) {
-      const targetHp = Math.min(Math.max(MIN_HP_TARGET, Math.floor(mhp * 0.7)), mhp);
-      const healthNeeded = targetHp - currentHp;
+    const currentNeck = adventurer.equipment.neck;
+    if (currentNeck.id === 0) {
+      const necklaces = marketItems
+        .filter(item => item.slot === "Neck" && !items.some(p => p.item_id === item.id))
+        .sort((a, b) => {
+          // Prefer matching armor material (Amulet=Cloth, Pendant=Hide, Necklace=Metal)
+          if (committedMaterial) {
+            const aMatch = neckMatchesArmor(a.id, committedMaterial) ? -1 : 0;
+            const bMatch = neckMatchesArmor(b.id, committedMaterial) ? -1 : 0;
+            if (aMatch !== bMatch) return aMatch - bMatch;
+          }
+          return a.price - b.price;
+        });
 
-      if (healthNeeded > 0) {
-        const potionsNeeded = Math.ceil(healthNeeded / POTION_HEAL_AMOUNT);
-
-        // Budget: be generous — potions keep us alive
-        let goldForPotions: number;
-        if (currentHp < MIN_HP_TARGET) {
-          goldForPotions = Math.floor(gold * 0.9); // Below 100 HP: spend almost everything
-        } else if (potionCost <= 1) {
-          goldForPotions = Math.max(0, gold - 4); // 1g potions: spend almost everything
-        } else if (currentHp < mhp * 0.7) {
-          goldForPotions = Math.floor(gold * 0.7);
-        } else {
-          goldForPotions = Math.floor(gold * 0.5);
-        }
-
-        const affordablePotions = Math.floor(goldForPotions / potionCost);
-        const buyPotions = Math.min(potionsNeeded, affordablePotions);
-        if (buyPotions > 0) {
-          potions += buyPotions;
-          gold -= buyPotions * potionCost;
-          const newHp = Math.min(adventurer.health + potions * POTION_HEAL_AMOUNT, mhp);
-          log.shop(`Potions: ${buyPotions} for ${buyPotions * potionCost}g (HP: ${adventurer.health}→${newHp}/${mhp}, ${potionCost}g each, target ${targetHp})`);
-        }
+      if (necklaces.length > 0 && necklaces[0].price <= gold && (gold - necklaces[0].price) >= minGoldReserve) {
+        const neck = necklaces[0];
+        items.push({ item_id: neck.id, equip: true });
+        gold -= neck.price;
+        log.shop(`Fill Neck: ${neck.name} T${neck.tier} for ${neck.price}g (Luck + armor bonus)`);
       }
     }
   }
 
-  // NOTE: Necklace buying REMOVED. At L10 necklaces reduce ~1.5 damage/hit —
-  // negligible vs spending that gold on 10+ potions (100 HP). Necklaces become
-  // valuable at high levels but we need to survive to get there first.
-
-  // NOTE: Armor upgrades REMOVED. Replacing armor resets greatness to G1,
-  // destroying progress toward G15 suffix unlock (+3 stat points per item).
-  // At 1g potions, 20g buys 200 HP of healing — far better than a T1 armor
-  // upgrade that saves ~35 HP/hit against only 1/3 of beast types.
-  // Keep starter armor and level it toward G20 instead.
-
-  // ── STEP 6: Backup weapon for elemental coverage ──
+  // ── STEP 6: Backup weapons for elemental coverage ──
   // Top games carry 3 T1 weapon types (Ghost Wand/Katana/Warhammer) for full
-  // beast coverage. Only buy backup weapons once the primary weapon reaches
-  // G20 (fully maxed — suffix + prefix unlocked, can't gain more XP).
+  // beast coverage. Buy backup weapons level-based — bag items gain XP passively
+  // (2 XP per beast kill on ALL items including bag).
+  // 2nd weapon at L15+, 3rd at L25+ for full type coverage.
+  // Delayed from L12 to L15 to avoid gold starvation — at L12 CHA~6 so T1 costs
+  // 14g, leaving nothing for potions. At L15 CHA~8 (cost 12g), gold is more abundant.
   {
-    const weaponGreatness = currentWeapon.id > 0 ? itemGreatness(currentWeapon.xp) : 0;
-    if (weaponGreatness >= 20) {
+    const bagItemCount = bag.items.filter(i => i.id > 0).length;
+    const pendingBagItems = items.filter(p => !p.equip).length;
+    const bagSpace = MAX_BAG_SIZE - bagItemCount - pendingBagItems;
+
+    if (level >= 15 && bagSpace > 0) {
       // Collect weapon types we already own (equipped + bag)
       const ownedWeaponTypes = new Set<ItemType>();
       if (currentWeapon.id > 0) {
@@ -456,8 +524,10 @@ export function decideMarketPurchases(
       const allWeaponTypes = [ItemType.Magic, ItemType.Blade, ItemType.Bludgeon];
       const missingTypes = allWeaponTypes.filter((t) => !ownedWeaponTypes.has(t));
 
+      // L15-24: buy 1 backup (2nd weapon), L25+: fill all missing types
+      const maxBackups = level >= 25 ? missingTypes.length : Math.min(1, missingTypes.length);
+
       if (missingTypes.length > 0) {
-        // Find best available weapon of a missing type (prefer T1)
         const backupCandidates = marketItems
           .filter(
             (item) =>
@@ -467,16 +537,18 @@ export function decideMarketPurchases(
           )
           .sort((a, b) => a.tier - b.tier); // Best tier first
 
-        if (backupCandidates.length > 0) {
-          const backup = backupCandidates[0];
+        let bought = 0;
+        for (const backup of backupCandidates) {
+          if (bought >= maxBackups || bagSpace <= bought) break;
           const backupReserve = Math.min(minGoldReserve, potionCost * 3);
           if (backup.price <= gold && (gold - backup.price) >= backupReserve) {
-            items.push({ item_id: backup.id, equip: false }); // to bag, not equipped
+            items.push({ item_id: backup.id, equip: false }); // to bag
             gold -= backup.price;
             log.shop(
               `BACKUP WEAPON: ${backup.name} T${backup.tier} (${backup.type}) for ${backup.price}g ` +
-              `— primary weapon G${weaponGreatness}, need ${backup.type} coverage`
+              `— need ${backup.type} coverage (${ownedWeaponTypes.size + bought + 1}/3 types)`
             );
+            bought++;
           } else {
             log.shop(
               `Want backup ${backup.name} T${backup.tier} (${backup.type}) but ${backup.price}g > budget ` +
@@ -488,7 +560,48 @@ export function decideMarketPurchases(
     }
   }
 
-  // ── STEP 7: Final potions — enforce 100 HP floor, then spend remaining gold ──
+  // ── STEP 7: Bag jewelry for Luck accumulation ──
+  // Luck = sum of greatness for all jewelry (equipped + bag).
+  // Top games carry 3-5 jewelry items. Each G20 jewelry = +20 Luck.
+  // Bag items gain XP passively, so buying early maximizes Luck growth.
+  {
+    const bagItemCount = bag.items.filter(i => i.id > 0).length;
+    const pendingBagItems = items.filter(p => !p.equip).length;
+    const bagSpace = MAX_BAG_SIZE - bagItemCount - pendingBagItems;
+
+    const currentBagJewelry = bag.items.filter(
+      i => ItemUtils.isRing(i.id) || ItemUtils.isNecklace(i.id)
+    ).length;
+
+    // Target: 1 extra at L10+, 2 at L15+, 3 at L25+
+    const targetBagJewelry = level >= 25 ? 3 : level >= 15 ? 2 : level >= 10 ? 1 : 0;
+
+    if (currentBagJewelry < targetBagJewelry && bagSpace > 0 && level >= 10) {
+      const jewelryCandidates = marketItems
+        .filter(item =>
+          (item.slot === "Ring" || item.slot === "Neck") &&
+          !items.some(p => p.item_id === item.id)
+        )
+        .sort((a, b) => a.tier - b.tier || a.price - b.price); // Best tier, then cheapest
+
+      const jewelryReserve = Math.max(minGoldReserve, potionCost * 5);
+      for (const jewelry of jewelryCandidates) {
+        if (currentBagJewelry >= targetBagJewelry) break;
+        if (bagSpace <= 0) break;
+        if (jewelry.price <= gold && (gold - jewelry.price) >= jewelryReserve) {
+          items.push({ item_id: jewelry.id, equip: false }); // To bag
+          gold -= jewelry.price;
+          log.shop(
+            `BAG JEWELRY: ${jewelry.name} T${jewelry.tier} for ${jewelry.price}g ` +
+            `(bag jewelry: ${currentBagJewelry + 1}/${targetBagJewelry}, Luck accumulation)`
+          );
+          break; // One per market visit to conserve gold
+        }
+      }
+    }
+  }
+
+  // ── STEP 8: Final potions — enforce 100 HP floor, then spend remaining gold ──
   {
     const currentHp = adventurer.health + potions * POTION_HEAL_AMOUNT;
 
@@ -507,12 +620,15 @@ export function decideMarketPurchases(
     }
 
     // Then: spend remaining gold on bonus potions up to max HP
+    // But only if missing at least half a potion of HP — don't waste gold on 2hp of healing.
     const updatedHp = adventurer.health + potions * POTION_HEAL_AMOUNT;
-    if (updatedHp < mhp && gold >= potionCost) {
+    const deficit = mhp - updatedHp;
+    if (updatedHp < mhp && deficit >= Math.ceil(POTION_HEAL_AMOUNT * 0.8) && gold >= potionCost) {
       const healthNeeded = mhp - updatedHp;
       const potionsNeeded = Math.ceil(healthNeeded / POTION_HEAL_AMOUNT);
+      const maxPotionsToMax = Math.ceil((mhp - updatedHp) / POTION_HEAL_AMOUNT);
       const affordablePotions = Math.floor(gold / potionCost);
-      const buyPotions = Math.min(potionsNeeded, affordablePotions);
+      const buyPotions = Math.min(potionsNeeded, affordablePotions, maxPotionsToMax);
       if (buyPotions > 0) {
         potions += buyPotions;
         gold -= buyPotions * potionCost;
@@ -522,6 +638,21 @@ export function decideMarketPurchases(
   }
 
   const totalCost = adventurer.gold - gold;
+
+  dashboard.emitMarketAction(
+    potions,
+    items.map(p => ({
+      id: p.item_id,
+      name: ItemUtils.getItemName(p.item_id),
+      tier: ItemUtils.getItemTier(p.item_id),
+      slot: ItemUtils.getItemSlot(p.item_id),
+      equip: p.equip,
+    })),
+    totalCost,
+    gold,
+    !!savingForWeapon,
+  );
+
   return { potions, items, totalCost };
 }
 

@@ -2,6 +2,7 @@ import type { Adventurer, Stats } from "../types.js";
 import { calculateLevel, maxHealth } from "../utils/math.js";
 import { ItemUtils } from "../utils/item-utils.js";
 import { log } from "../utils/logger.js";
+import { dashboard } from "../dashboard/events.js";
 
 /**
  * Stat allocation based on top-game analysis (games 13218, 196424, 36005,
@@ -20,11 +21,15 @@ import { log } from "../utils/logger.js";
  *   No WIS, INT, or VIT — flee + cheap potions handles survival.
  *   Safe single-explores (engine.ts) prevent chained ambush damage.
  *
- * Phase 2 (L15+): VIT scaling with DEX maintenance
- *   Multi-level-ups provide bulk points for VIT dump.
- *   DEX floor at ~55% of level for reasonable flee (~55%/round).
+ * Phase 2 (L15-L35): VIT scaling with capped DEX
+ *   Top games had DEX 18-25 at L25. DEX 18 at L30 = 60% per attempt,
+ *   99% over 5 attempts. The massive HP pool absorbs hits while fleeing.
  *   VIT gets all excess points (MaxHP = 100 + VIT*15).
  *   CHA maintenance continues.
+ *
+ * Phase 3 (L36+): WIS for obstacle dodge
+ *   At L36+, obstacles deal massive damage. WIS >= level = guaranteed dodge.
+ *   VIT pool should be 25-30+ by now, so we can afford WIS investment.
  */
 
 const MAX_STAT_VALUE = 31;
@@ -89,6 +94,14 @@ export function allocateStats(adventurer: Adventurer): Stats {
     `Totals: STR:${str} DEX:${dex} VIT:${vit} WIS:${wis} INT:${int_} CHA:${cha}` +
     ` | Flee:~${fleePct(dex, level)}% Potion:${potionCost}g HP:${hp}/${mhp}`
   );
+
+  dashboard.emitStatAllocation(
+    points,
+    allocation,
+    { strength: str, dexterity: dex, vitality: vit, intelligence: int_, wisdom: wis, charisma: cha, luck: adventurer.stats.luck },
+    level,
+  );
+
   return allocation;
 }
 
@@ -99,9 +112,12 @@ export function allocateStats(adventurer: Adventurer): Stats {
 //   Top games had DEX:5-7 CHA:4-6 at L10 with WIS=0 INT=0 VIT=0-2.
 //   Safe single-explores (engine.ts) handle ambush/obstacle damage.
 //
-// Phase 2 (L15+): VIT dump with DEX floor at 55% of level.
-//   Top games had VIT:5-15 at L15, VIT:20-30 at L20.
-//   DEX maintained at ~55% of level for reasonable flee chance.
+// Phase 2 (L15-L35): VIT dump with DEX capped at 18.
+//   Top games had VIT:5-15 at L15, VIT:20-30 at L20, VIT:40-50 at L30.
+//   DEX stops at 18 — massive HP pool absorbs hits while fleeing.
+//
+// Phase 3 (L36+): WIS for obstacle dodge.
+//   WIS >= level = guaranteed dodge. Funded by massive VIT pool.
 // ---------------------------------------------------------------------------
 
 function pickNextStat(
@@ -140,13 +156,20 @@ function pickNextStat(
     if (!capped(vit)) return "vitality"; // overflow (unlikely)
   }
 
-  // ── Phase 2 (L15+): VIT scaling with DEX maintenance ──
-  // Multi-level-ups provide bulk points. Top games dump VIT heavily
-  // while keeping DEX at ~50-60% of level for decent flee chance.
-  // At 55%, flee per round is ~55% → flee-to-the-death over 5 rounds
-  // succeeds ~98% of the time. HP buffer absorbs the hits.
-  const dexFloor = Math.ceil(level * 0.55);
+  // ── Phase 2 (L15-L35): VIT scaling with capped DEX ──
+  // Top games had DEX 18-25 at L25. DEX 18 at L30 = 60% per attempt,
+  // 99% over 5 attempts. The massive VIT/HP pool absorbs hits while fleeing.
+  // ceil(level*0.55) grows naturally to 18 by L33, then cap holds.
+  const dexFloor = Math.min(Math.ceil(level * 0.55), 18);
   if (dex < dexFloor && !capped(dex)) return "dexterity";
+
+  // ── Phase 3 (L36+): WIS for obstacle dodge ──
+  // At L36+, obstacles deal massive damage. WIS >= level = guaranteed dodge.
+  // By this point VIT should be 25-30+, so we can afford WIS investment.
+  if (level >= 36) {
+    const wisTarget = Math.min(level, MAX_STAT_VALUE);
+    if (wis < wisTarget && !capped(wis)) return "wisdom";
+  }
 
   // VIT gets all remaining points — HP pool is critical at higher levels.
   // Each VIT = +15 max HP. VIT=20 → 400 maxHP, VIT=30 → 550 maxHP.

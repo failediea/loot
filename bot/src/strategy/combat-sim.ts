@@ -1,14 +1,6 @@
-import type { Adventurer, Beast, Bag, Equipment } from "../types.js";
+import type { Adventurer, Beast, Equipment } from "../types.js";
 import { calculateAttackDamage, calculateBeastDamage } from "../utils/combat-calc.js";
-import { getBeastTier } from "../utils/beast-utils.js";
 import { calculateLevel } from "../utils/math.js";
-import {
-  MINIMUM_XP_REWARD,
-  XP_REWARD_DIVISOR,
-  MAX_XP_DECAY,
-  FLEE_XP_REWARD,
-  POTION_HEAL_AMOUNT,
-} from "../constants/game.js";
 
 // ─── Result Interfaces ──────────────────────────────────────────────────────
 
@@ -24,13 +16,6 @@ export interface FleeSimResult {
   expectedAttempts: number;     // average flee attempts before success
   expectedHpLoss: number;       // average HP lost while fleeing
   fleeDeathRate: number;        // chance of dying while trying to flee
-}
-
-export interface CombatEV {
-  attackEV: number;             // expected value of attacking
-  fleeEV: number;              // expected value of fleeing
-  recommendation: "attack" | "flee";
-  confidence: number;           // how much better the recommendation is
 }
 
 // ─── Precomputed Damage Tables ──────────────────────────────────────────────
@@ -249,89 +234,5 @@ export function simulateFlee(
     expectedAttempts: totalAttempts / samples,
     expectedHpLoss: totalHpLost / samples,
     fleeDeathRate: deaths / samples,
-  };
-}
-
-// ─── Expected Value Computation ─────────────────────────────────────────────
-
-/** Very high penalty to discourage actions that risk death. */
-const DEATH_PENALTY = 1000;
-
-/** Approximate value of 1 gold relative to 1 XP. */
-const GOLD_VALUE = 0.5;
-
-/**
- * Estimate XP reward for killing a beast, using the contract formula:
- *   max(4, floor((tierMult * beastLevel / 2) * (100 - min(advLevel*2, 95)) / 100))
- */
-function estimateKillXp(beastTier: number, beastLevel: number, adventurerLevel: number): number {
-  const tierMult = 6 - beastTier;
-  const decayPct = Math.min(adventurerLevel * 2, MAX_XP_DECAY);
-  const base = Math.floor((tierMult * beastLevel) / XP_REWARD_DIVISOR);
-  const decayed = Math.floor((base * (100 - decayPct)) / 100);
-  return Math.max(MINIMUM_XP_REWARD, decayed);
-}
-
-/**
- * Estimate gold reward for killing a beast.
- *   gold = max(1, floor(beastLevel * (6 - tier) / 2))
- */
-function estimateKillGold(beastTier: number, beastLevel: number): number {
-  return Math.max(1, Math.floor(beastLevel * (6 - beastTier) / 2));
-}
-
-/**
- * Combine combat and flee simulations into an expected-value comparison.
- *
- * attackEV = winRate * (killXP + killGold * goldValue)
- *          - deathRate * deathPenalty
- *          - expectedHpLoss * potionCost
- *
- * fleeEV   = (1 - fleeDeathRate) * FLEE_XP_REWARD
- *          - fleeDeathRate * deathPenalty
- *          - fleeHpLoss * potionCost
- *
- * potionCost = max(1, level - charisma * 2) / POTION_HEAL_AMOUNT
- *   (the gold cost to restore 1 HP)
- */
-export function computeCombatEV(
-  adventurer: Adventurer,
-  beast: Beast,
-  bag: Bag,
-  level: number,
-): CombatEV {
-  const tier = beast.tier ?? getBeastTier(beast.id);
-
-  // Run simulations
-  const combatResult = simulateCombat(adventurer, beast);
-  const fleeResult = simulateFlee(adventurer, beast, level);
-
-  // Potion cost per HP point
-  const potionGoldCost = Math.max(1, level - adventurer.stats.charisma * 2);
-  const costPerHp = potionGoldCost / POTION_HEAL_AMOUNT;
-
-  // Attack EV
-  const killXp = estimateKillXp(tier, beast.level, level);
-  const killGold = estimateKillGold(tier, beast.level);
-  const attackReward = killXp + killGold * GOLD_VALUE;
-  const attackEV =
-    combatResult.winRate * attackReward
-    - combatResult.deathRate * DEATH_PENALTY
-    - combatResult.expectedHpLoss * costPerHp;
-
-  // Flee EV
-  const fleeEV =
-    (1 - fleeResult.fleeDeathRate) * FLEE_XP_REWARD
-    - fleeResult.fleeDeathRate * DEATH_PENALTY
-    - fleeResult.expectedHpLoss * costPerHp;
-
-  const recommendation: "attack" | "flee" = attackEV >= fleeEV ? "attack" : "flee";
-  const confidence = Math.abs(attackEV - fleeEV);
-
-  return {
-    attackEV,
-    fleeEV,
-    recommendation,
-    confidence,
   };
 }

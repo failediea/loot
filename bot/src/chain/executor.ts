@@ -2,10 +2,13 @@ import { addAddressPadding, hash, transaction, cairo, type Call } from "starknet
 import { poseidonHashMany, poseidonSmall, sign as starkSign } from "@scure/starknet";
 import {
   createSessionAccount,
+  computeWildcardSessionHash,
   getLastTxHash,
   getLastTxError,
   resetTxState,
   getOrigFetch,
+  type SessionCredentials,
+  DEFAULT_CREDENTIALS,
   CONTROLLER,
   SESSION_PRIV,
   SESSION_KEY_GUID,
@@ -13,9 +16,11 @@ import {
   WILDCARD_ROOT,
 } from "./session.js";
 import { log } from "../utils/logger.js";
+import { dashboard } from "../dashboard/events.js";
 
-const TX_TIMEOUT_MS = 15000;
-const RECEIPT_WAIT_MS = 8000;
+const TX_TIMEOUT_MS = 10000;
+const RECEIPT_WAIT_MS = 500;
+const RECEIPT_POLL_INTERVAL_MS = 1000;
 const MAX_RETRIES = 3;
 
 /** Check if an error message indicates a contract simulation/revert failure (not retryable). */
@@ -47,7 +52,8 @@ export async function executeTransaction(
   calls: any[],
   description: string,
   rpcUrl?: string,
-  chainId?: string
+  chainId?: string,
+  creds?: SessionCredentials
 ): Promise<any> {
   const url = rpcUrl || "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_9";
   const chain = chainId || "0x534e5f4d41494e";
@@ -55,10 +61,11 @@ export async function executeTransaction(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       log.tx(`Executing: ${description} (attempt ${attempt}/${MAX_RETRIES})`);
+      dashboard.emitTxStatus("submitting", description, undefined, undefined, attempt);
       resetTxState();
 
       // Create fresh session account (WASM instance dies after each use)
-      const sa = await createSessionAccount(url, chain);
+      const sa = await createSessionAccount(url, chain, creds);
 
       // Normalize calls: ensure contractAddress is padded
       const normalizedCalls = calls.map((c: any) => ({
@@ -66,24 +73,34 @@ export async function executeTransaction(
         contractAddress: addAddressPadding(c.contractAddress),
       }));
 
-      // Execute with timeout - WASM crashes after successful submission
-      const wasmPromise = sa.executeFromOutside(normalizedCalls)
-        .catch((e: any) => ({ error: e.message?.slice(0, 300) }));
-      const timeoutPromise = new Promise<{ timeout: true }>(
-        (r) => setTimeout(() => r({ timeout: true }), TX_TIMEOUT_MS)
-      );
-      const result = await Promise.race([wasmPromise, timeoutPromise]);
+      // Fire WASM call — triggers fetch interceptor, but promise will hang (WASM crashes)
+      let wasmResolved = false;
+      sa.executeFromOutside(normalizedCalls)
+        .then((result: any) => {
+          wasmResolved = true;
+          // Future-proof: if Cartridge fixes WASM, capture hash from result too
+          if (!getLastTxHash()) {
+            const h = typeof result === 'string' ? result : result?.transaction_hash;
+            if (h) log.tx(`TX hash from WASM resolve: ${h}`);
+          }
+        })
+        .catch(() => {}); // Swallow — crash is uncaughtException, not rejection
 
-      // Get tx hash from interceptor
-      let txHash = getLastTxHash();
-      if (result && !('timeout' in result) && !('error' in result)) {
-        txHash = typeof result === 'string' ? result : result?.transaction_hash || txHash;
+      // Poll for TX result from interceptor — hash appears in ~1-3s
+      let txHash: string | null = null;
+      let txError: string | null = null;
+      const deadline = Date.now() + TX_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        txHash = getLastTxHash();
+        txError = getLastTxError();
+        if (txHash || txError || wasmResolved) break;
+        await delay(100);
       }
+      if (!txHash) txHash = getLastTxHash();
+      if (!txError) txError = getLastTxError();
 
-      const txError = getLastTxError();
       if (txError && !txHash) {
         log.error(`TX Error: ${txError}`);
-        // Don't retry on contract simulation/revert errors
         if (isContractRevert(txError)) {
           throw new Error(`Transaction reverted: ${txError}`);
         }
@@ -95,11 +112,7 @@ export async function executeTransaction(
       }
 
       if (!txHash) {
-        if (result && 'error' in result) {
-          log.error(`WASM error: ${(result as any).error}`);
-        } else {
-          log.warn(`Timeout - no tx hash captured`);
-        }
+        log.warn(`Timeout - no tx hash captured`);
         if (attempt < MAX_RETRIES) {
           await delay(2000 * attempt);
           continue;
@@ -108,6 +121,7 @@ export async function executeTransaction(
       }
 
       log.tx(`TX submitted: ${txHash}`);
+      dashboard.emitTxStatus("submitted", description, txHash);
 
       // Wait for receipt
       const receipt = await waitForReceipt(url, txHash);
@@ -117,14 +131,17 @@ export async function executeTransaction(
         if (receipt.revert_reason) {
           log.error(`Reason: ${receipt.revert_reason}`);
         }
+        dashboard.emitTxStatus("reverted", description, txHash, receipt.revert_reason);
         throw new Error(`Transaction reverted: ${receipt.revert_reason || "unknown"}`);
       }
 
       log.success(`TX confirmed: ${description}`);
+      dashboard.emitTxStatus("confirmed", description, txHash);
       return receipt || { transaction_hash: txHash };
     } catch (error: any) {
       const msg = error?.message || String(error);
       log.error(`TX failed (attempt ${attempt}): ${msg.slice(0, 200)}`);
+      dashboard.emitTxStatus("error", description, undefined, msg.slice(0, 200), attempt);
 
       if (msg.includes("reverted")) {
         throw error; // Don't retry reverts
@@ -148,10 +165,10 @@ export async function executeTransaction(
 async function waitForReceipt(rpcUrl: string, txHash: string): Promise<any> {
   const origFetch = getOrigFetch();
 
-  // Wait a bit for the tx to be processed
+  // Brief wait before first poll — TX needs a moment to propagate
   await delay(RECEIPT_WAIT_MS);
 
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 20; i++) {
     try {
       const resp = await origFetch.call(globalThis, rpcUrl, {
         method: 'POST',
@@ -170,19 +187,19 @@ async function waitForReceipt(rpcUrl: string, txHash: string): Promise<any> {
           return data.result;
         }
         // Still pending
-        log.info(`TX pending (attempt ${i + 1}/15)...`);
+        log.info(`TX pending (attempt ${i + 1}/20)...`);
       } else if (data.error) {
         // TX not found yet, keep waiting
-        log.info(`TX not found yet (attempt ${i + 1}/15)...`);
+        log.info(`TX not found yet (attempt ${i + 1}/20)...`);
       }
     } catch (e: any) {
       log.warn(`Receipt fetch error: ${e.message?.slice(0, 100)}`);
     }
 
-    await delay(3000);
+    await delay(RECEIPT_POLL_INTERVAL_MS);
   }
 
-  log.warn(`Could not get receipt for ${txHash} after 15 attempts`);
+  log.warn(`Could not get receipt for ${txHash} after 20 attempts`);
   return null;
 }
 
@@ -192,52 +209,6 @@ async function waitForReceipt(rpcUrl: string, txHash: string): Promise<any> {
 
 const SIGN_TIMEOUT_MS = 10000;
 const DIRECT_INVOKE_MAX_RETRIES = 3;
-
-/**
- * Compute the session hash with wildcard policies root.
- *
- * 1. Session struct hash = poseidonHashMany([TYPE_HASH, expires_at, allowed_policies_root, metadata_hash, session_key_guid, guardian_key_guid])
- * 2. StarknetDomain struct hash = poseidonHashMany([DOMAIN_TYPE_HASH, name, version, chain_id, revision])
- * 3. Token session hash = poseidonHashMany(["StarkNet Message", domain_hash, controller_address, session_struct_hash])
- */
-function computeWildcardSessionHash(chainId: string, controllerAddress: string): bigint {
-  // Session TYPE_HASH_REV_1
-  const sessionTypeHashStr = '"Session"("Expires At":"timestamp","Allowed Methods":"merkletree","Metadata":"string","Session Key":"felt")';
-  const sessionTypeHash = BigInt(hash.getSelectorFromName(sessionTypeHashStr));
-
-  const sessionStructHash = poseidonHashMany([
-    sessionTypeHash,
-    BigInt(SESSION_EXPIRES),      // expires_at
-    BigInt(WILDCARD_ROOT),        // allowed_policies_root (WILDCARD!)
-    0n,                            // metadata_hash ("0x0")
-    BigInt(SESSION_KEY_GUID),     // session_key_guid
-    0n,                            // guardian_key_guid ("0x0")
-  ]);
-
-  // StarknetDomain TYPE_HASH_REV_1
-  const domainTypeHashStr = '"StarknetDomain"("name":"shortstring","version":"shortstring","chainId":"shortstring","revision":"shortstring")';
-  const domainTypeHash = BigInt(hash.getSelectorFromName(domainTypeHashStr));
-
-  const domainName = BigInt("0x" + Buffer.from("SessionAccount.session").toString("hex"));
-  const domainVersion = BigInt("0x" + Buffer.from("1").toString("hex"));
-
-  const domainStructHash = poseidonHashMany([
-    domainTypeHash,
-    domainName,                    // "SessionAccount.session" as short string
-    domainVersion,                 // "1" as short string
-    BigInt(chainId),              // chain_id
-    1n,                            // revision = 1
-  ]);
-
-  const starknetMessage = BigInt("0x" + Buffer.from("StarkNet Message").toString("hex"));
-
-  return poseidonHashMany([
-    starknetMessage,
-    domainStructHash,
-    BigInt(controllerAddress),
-    sessionStructHash,
-  ]);
-}
 
 /**
  * Execute a transaction as an Invoke V3 paying gas from the controller's STRK balance.
@@ -259,7 +230,8 @@ export async function executeDirectInvoke(
   calls: any[],
   description: string,
   rpcUrl?: string,
-  chainId?: string
+  chainId?: string,
+  creds?: SessionCredentials
 ): Promise<any> {
   const url = rpcUrl || "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_9";
   const chain = chainId || "0x534e5f4d41494e";
@@ -268,9 +240,12 @@ export async function executeDirectInvoke(
   for (let attempt = 1; attempt <= DIRECT_INVOKE_MAX_RETRIES; attempt++) {
     try {
       log.tx(`Direct invoke: ${description} (attempt ${attempt}/${DIRECT_INVOKE_MAX_RETRIES})`);
+      dashboard.emitTxStatus("submitting", description, undefined, undefined, attempt);
+
+      const cr = creds || DEFAULT_CREDENTIALS;
 
       // 1. Create fresh session account
-      const sa = await createSessionAccount(url, chain);
+      const sa = await createSessionAccount(url, chain, creds);
 
       // Normalize calls
       const normalizedCalls: Call[] = calls.map((c: any) => ({
@@ -286,7 +261,7 @@ export async function executeDirectInvoke(
         body: JSON.stringify({
           jsonrpc: '2.0', id: 1,
           method: 'starknet_getNonce',
-          params: { block_id: 'latest', contract_address: CONTROLLER },
+          params: { block_id: 'latest', contract_address: cr.controller },
         }),
       });
       const nonceData = await nonceResp.json() as any;
@@ -319,14 +294,14 @@ export async function executeDirectInvoke(
       const resourceBounds = {
         l1_gas: { max_amount: 0x4e20n, max_price_per_unit: l1Price },
         l2_gas: { max_amount: 0x1312d00n, max_price_per_unit: l2Price },
-        l1_data_gas: { max_amount: 0x3e8n, max_price_per_unit: l1DataPrice },
+        l1_data_gas: { max_amount: 0x800n, max_price_per_unit: l1DataPrice },
       };
 
       // 4. Compute invoke V3 tx hash
       const compiledCalldata = transaction.getExecuteCalldata(normalizedCalls, cairo.felt('1') as any);
 
       const txHashForSign = hash.calculateInvokeTransactionHash({
-        senderAddress: CONTROLLER,
+        senderAddress: cr.controller,
         version: '0x3',
         compiledCalldata,
         chainId: chain as any,
@@ -358,15 +333,15 @@ export async function executeDirectInvoke(
       try { sa.free(); } catch {}
 
       // 6. Apply wildcard fix
-      const wildcardSessionHash = computeWildcardSessionHash(chain, CONTROLLER);
+      const wildcardSessionHash = computeWildcardSessionHash(chain, cr.controller, creds);
 
       // Replace policies root with wildcard
-      signature[2] = WILDCARD_ROOT;
+      signature[2] = cr.wildcardRoot;
 
       // Recompute signing hash using the wildcard session hash
       const signingInput = poseidonSmall([BigInt(txHashForSign), wildcardSessionHash, 2n]);
       const signingHash = "0x" + signingInput[0].toString(16);
-      const newSig = starkSign(signingHash, SESSION_PRIV);
+      const newSig = starkSign(signingHash, cr.sessionPriv);
       signature[12] = "0x" + newSig.r.toString(16);
       signature[13] = "0x" + newSig.s.toString(16);
 
@@ -384,7 +359,7 @@ export async function executeDirectInvoke(
         params: {
           invoke_transaction: {
             type: 'INVOKE',
-            sender_address: CONTROLLER,
+            sender_address: cr.controller,
             calldata: compiledCalldata,
             version: '0x3',
             signature,
@@ -442,6 +417,7 @@ export async function executeDirectInvoke(
       }
 
       log.tx(`TX submitted: ${txHash}`);
+      dashboard.emitTxStatus("submitted", description, txHash);
 
       // 8. Wait for receipt
       const receipt = await waitForReceipt(url, txHash);
@@ -451,14 +427,17 @@ export async function executeDirectInvoke(
         if (receipt.revert_reason) {
           log.error(`Reason: ${receipt.revert_reason}`);
         }
+        dashboard.emitTxStatus("reverted", description, txHash, receipt.revert_reason);
         throw new Error(`Transaction reverted: ${receipt.revert_reason || "unknown"}`);
       }
 
       log.success(`Direct invoke confirmed: ${description}`);
+      dashboard.emitTxStatus("confirmed", description, txHash);
       return receipt || { transaction_hash: txHash };
     } catch (error: any) {
       const msg = error?.message || String(error);
       log.error(`Direct invoke failed (attempt ${attempt}): ${msg.slice(0, 200)}`);
+      dashboard.emitTxStatus("error", description, undefined, msg.slice(0, 200), attempt);
 
       if (msg.includes("reverted")) {
         throw error; // Don't retry reverts

@@ -1,0 +1,38 @@
+{
+  "name": "loot-survivor-saas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --require ./polyfill-als.cjs --experimental-wasm-modules --import tsx/esm server.ts",
+    "build": "next build",
+    "start": "NODE_ENV=production node --require ./polyfill-als.cjs --experimental-wasm-modules --import tsx/esm server.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@cartridge/controller": "^0.13.9",
+    "@starknet-react/chains": "^5.0.3",
+    "@starknet-react/core": "^5.0.3",
+    "better-sqlite3": "^11",
+    "drizzle-orm": "^0.38",
+    "jose": "^6",
+    "next": "^14.2",
+    "react": "^18",
+    "react-dom": "^18",
+    "starknet": "^8.9.2",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7",
+    "@types/node": "^22",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/ws": "^8",
+    "drizzle-kit": "^0.30",
+    "tailwindcss": "^4",
+    "tsx": "^4",
+    "typescript": "^5.8"
+  }
+}

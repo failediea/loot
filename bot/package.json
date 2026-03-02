@@ -13,9 +13,11 @@
     "@cartridge/controller-wasm": "0.9.4",
     "@scure/starknet": "^2.0.0",
     "dotenv": "^16.4.7",
-    "starknet": "8.5.2"
+    "starknet": "8.5.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/ws": "^8.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }

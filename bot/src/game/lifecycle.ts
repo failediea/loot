@@ -108,16 +108,24 @@ export async function ensureTicketToken(
   await executeDirectInvoke(swapCalls, "swap_strk_to_ticket", config.rpcUrl, config.chainId);
   log.success("Swap complete! Ticket token acquired.");
 
-  // Verify
-  const newBal = await getTokenBalance(
-    provider,
-    config.ticketTokenAddress,
-    config.accountAddress
-  );
+  // Verify — poll for up to 10 seconds since RPC may return stale data
+  let newBal = 0n;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) {
+      log.info(`Balance still stale, retrying (${attempt + 1}/5)...`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    newBal = await getTokenBalance(
+      provider,
+      config.ticketTokenAddress,
+      config.accountAddress
+    );
+    if (newBal >= BigInt(1e18)) break;
+  }
   log.info(`New ticket balance: ${Number(newBal) / 1e18}`);
 
   if (newBal < BigInt(1e18)) {
-    throw new Error("Swap succeeded but ticket balance still insufficient");
+    throw new Error("Swap succeeded but ticket balance still insufficient after polling");
   }
 }
 

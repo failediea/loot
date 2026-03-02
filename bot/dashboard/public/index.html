@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loot Survivor Bot — Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --text-bright: #f0f6fc;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --orange: #f0883e;
+    --gold: #e3b341;
+    --cyan: #39d2c0;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .header h1 {
+    font-size: 16px;
+    color: var(--text-bright);
+    font-weight: 600;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .game-id { background: var(--bg3); color: var(--blue); }
+  .level-badge { background: var(--bg3); color: var(--gold); }
+  .phase-badge { padding: 2px 12px; }
+  .phase-exploring { background: #1a3a1a; color: var(--green); }
+  .phase-in_battle, .phase-starter_beast { background: #3a1a1a; color: var(--red); }
+  .phase-shopping { background: #3a2a0a; color: var(--gold); }
+  .phase-stat_upgrade { background: #1a2a3a; color: var(--blue); }
+  .phase-dead { background: var(--bg3); color: var(--text-dim); }
+  .phase-idle { background: var(--bg3); color: var(--text-dim); }
+  .ws-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--red);
+    margin-left: auto;
+    transition: background 0.3s;
+  }
+  .ws-dot.connected { background: var(--green); }
+
+  /* Layout */
+  .grid {
+    display: grid;
+    grid-template-columns: 280px 1fr 300px;
+    grid-template-rows: 1fr auto;
+    gap: 1px;
+    background: var(--border);
+    height: calc(100vh - 49px);
+  }
+  .grid > * {
+    background: var(--bg);
+    overflow-y: auto;
+  }
+
+  /* Panels */
+  .panel { padding: 12px; }
+  .panel-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Stats */
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+  }
+  .stat-label { color: var(--text-dim); }
+  .stat-value { color: var(--text-bright); font-weight: 600; }
+
+  /* HP bar */
+  .hp-bar-container {
+    background: var(--bg3);
+    border-radius: 4px;
+    height: 20px;
+    margin: 6px 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .hp-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease, background 0.5s ease;
+  }
+  .hp-text {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-bright);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+
+  /* Equipment */
+  .equip-slot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--bg3);
+  }
+  .equip-slot:last-child { border-bottom: none; }
+  .slot-label {
+    width: 50px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  .item-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .item-name.empty { color: var(--text-dim); font-style: italic; }
+  .tier-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+  .tier-1 { background: #3a2a0a; color: var(--gold); }
+  .tier-2 { background: #2a2a2a; color: #ccc; }
+  .tier-3 { background: #1a2a1a; color: var(--green); }
+  .tier-4 { background: #1a1a2a; color: var(--blue); }
+  .tier-5 { background: var(--bg3); color: var(--text-dim); }
+  .greatness-bar {
+    width: 40px; height: 6px;
+    background: var(--bg3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .greatness-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+
+  /* Beast panel */
+  .beast-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 8px;
+  }
+  .beast-panel.hidden { display: none; }
+  .beast-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--red);
+  }
+  .beast-info {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .sim-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+    font-size: 12px;
+  }
+  .sim-label { color: var(--text-dim); }
+  .sim-value { color: var(--text-bright); text-align: right; }
+  .sim-profitable { color: var(--green); }
+  .sim-unprofitable { color: var(--red); }
+
+  /* Action log */
+  .log-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .log-entries {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .log-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--bg2);
+    font-size: 12px;
+    display: flex;
+    gap: 8px;
+  }
+  .log-ts {
+    color: var(--text-dim);
+    font-size: 11px;
+    white-space: nowrap;
+    min-width: 55px;
+  }
+  .log-tag {
+    font-size: 10px;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    white-space: nowrap;
+    height: 18px;
+    line-height: 18px;
+  }
+  .tag-combat { background: #3a1a1a; color: var(--red); }
+  .tag-explore { background: #1a3a1a; color: var(--green); }
+  .tag-shop { background: #3a2a0a; color: var(--gold); }
+  .tag-stats { background: #1a2a3a; color: var(--blue); }
+  .tag-tx { background: #2a1a3a; color: var(--purple); }
+  .tag-error { background: #3a0a0a; color: #ff6b6b; }
+  .tag-game { background: #0a2a2a; color: var(--cyan); }
+  .log-msg {
+    flex: 1;
+    word-break: break-word;
+  }
+
+  /* TX monitor */
+  .tx-entry {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--bg2);
+    font-size: 12px;
+  }
+  .tx-hash {
+    color: var(--blue);
+    text-decoration: none;
+    font-size: 11px;
+  }
+  .tx-hash:hover { text-decoration: underline; }
+  .tx-desc { color: var(--text); margin-top: 2px; }
+  .tx-status-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .tx-submitting { background: #2a2a0a; color: var(--yellow); }
+  .tx-submitted { background: #2a1a3a; color: var(--purple); }
+  .tx-confirmed { background: #1a3a1a; color: var(--green); }
+  .tx-reverted { background: #3a1a1a; color: var(--red); }
+  .tx-error { background: #3a0a0a; color: #ff6b6b; }
+
+  /* Game history */
+  .history-panel {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .history-toggle {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .history-toggle:hover { color: var(--text-bright); }
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 6px;
+  }
+  .history-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .history-table td {
+    padding: 3px 8px;
+    border-bottom: 1px solid var(--bg2);
+  }
+  .history-summary {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  .collapsed { display: none; }
+
+  /* Gold counter */
+  .gold { color: var(--gold); }
+  .xp { color: var(--cyan); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Loot Survivor Bot</h1>
+  <span class="badge game-id" id="gameId">No Game</span>
+  <span class="badge level-badge" id="levelBadge">L1</span>
+  <span class="badge phase-badge phase-idle" id="phaseBadge">idle</span>
+  <div class="ws-dot" id="wsDot" title="WebSocket connection"></div>
+</div>
+
+<div class="grid">
+  <!-- Left: Adventurer -->
+  <div class="panel" id="adventurerPanel">
+    <div class="panel-title">Adventurer</div>
+
+    <div class="hp-bar-container">
+      <div class="hp-bar" id="hpBar" style="width:100%; background: var(--green);"></div>
+      <div class="hp-text" id="hpText">100 / 100</div>
+    </div>
+
+    <div style="display:flex; gap:16px; margin-bottom:8px;">
+      <div><span class="stat-label">XP </span><span class="xp" id="xpVal">0</span></div>
+      <div><span class="stat-label">Gold </span><span class="gold" id="goldVal">0</span></div>
+      <div><span class="stat-label">Upgrades </span><span id="upgradesVal" style="color:var(--blue)">0</span></div>
+    </div>
+
+    <div class="panel-title" style="margin-top:8px;">Stats</div>
+    <div id="statsTable"></div>
+
+    <div class="panel-title" style="margin-top:8px;">Equipment</div>
+    <div id="equipmentList"></div>
+
+    <details style="margin-top:8px;">
+      <summary class="panel-title" style="cursor:pointer; border:none; padding:0;">Bag</summary>
+      <div id="bagList" style="margin-top:4px;"></div>
+    </details>
+  </div>
+
+  <!-- Center: Activity -->
+  <div class="panel log-container">
+    <div id="beastPanel" class="beast-panel hidden"></div>
+    <div class="panel-title">Activity Log</div>
+    <div class="log-entries" id="logEntries"></div>
+  </div>
+
+  <!-- Right: TX Monitor -->
+  <div class="panel">
+    <div class="panel-title">Transactions</div>
+    <div id="txList"></div>
+  </div>
+
+  <!-- Bottom: History -->
+  <div class="panel history-panel" id="historyPanel">
+    <div class="history-toggle" id="historyToggle">
+      <span id="historyArrow">&#9654;</span>
+      <span class="panel-title" style="margin:0; border:none; padding:0;">Game History</span>
+    </div>
+    <div id="historyContent" class="collapsed"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ─── State ───
+  var ws = null;
+  var reconnectDelay = 1000;
+  var MAX_RECONNECT_DELAY = 30000;
+  var MAX_LOG_ENTRIES = 300;
+  var MAX_TX_ENTRIES = 10;
+  var txHistory = [];
+  var gameHistory = [];
+
+  // ─── DOM refs ───
+  function $(id) { return document.getElementById(id); }
+  var wsDot = $('wsDot');
+  var gameIdEl = $('gameId');
+  var levelBadge = $('levelBadge');
+  var phaseBadge = $('phaseBadge');
+  var hpBar = $('hpBar');
+  var hpText = $('hpText');
+  var xpVal = $('xpVal');
+  var goldVal = $('goldVal');
+  var upgradesVal = $('upgradesVal');
+  var statsTable = $('statsTable');
+  var equipmentList = $('equipmentList');
+  var bagList = $('bagList');
+  var beastPanel = $('beastPanel');
+  var logEntries = $('logEntries');
+  var txListEl = $('txList');
+  var historyToggle = $('historyToggle');
+  var historyContent = $('historyContent');
+  var historyArrow = $('historyArrow');
+
+  // ─── History toggle ───
+  var historyOpen = false;
+  historyToggle.addEventListener('click', function() {
+    historyOpen = !historyOpen;
+    historyContent.classList.toggle('collapsed', !historyOpen);
+    historyArrow.textContent = historyOpen ? '\u25BC' : '\u25B6';
+  });
+
+  // ─── Safe text helpers ───
+  function esc(str) {
+    var d = document.createElement('div');
+    d.textContent = str;
+    return d.textContent;
+  }
+
+  function el(tag, attrs, children) {
+    var e = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (k === 'className') e.className = attrs[k];
+        else if (k === 'style') e.style.cssText = attrs[k];
+        else if (k === 'title') e.title = attrs[k];
+        else if (k === 'href') e.href = attrs[k];
+        else if (k === 'target') e.target = attrs[k];
+        else e.setAttribute(k, attrs[k]);
+      }
+    }
+    if (typeof children === 'string') e.textContent = children;
+    else if (Array.isArray(children)) children.forEach(function(c) { if (c) e.appendChild(c); });
+    else if (children instanceof Node) e.appendChild(children);
+    return e;
+  }
+
+  // ─── WebSocket ───
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host);
+
+    ws.onopen = function() {
+      wsDot.classList.add('connected');
+      reconnectDelay = 1000;
+    };
+
+    ws.onclose = function() {
+      wsDot.classList.remove('connected');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    };
+
+    ws.onerror = function() { ws.close(); };
+
+    ws.onmessage = function(e) {
+      var data = JSON.parse(e.data);
+      if (data.type === 'init') {
+        handleInit(data);
+      } else {
+        handleEvent(data, false);
+      }
+    };
+  }
+
+  function handleInit(data) {
+    if (data.currentState) {
+      renderState(data.currentState);
+    }
+    if (data.recentEvents) {
+      for (var i = 0; i < data.recentEvents.length; i++) {
+        handleEvent(data.recentEvents[i], true);
+      }
+    }
+    if (data.gameHistory) {
+      for (var i = 0; i < data.gameHistory.length; i++) {
+        var gh = data.gameHistory[i];
+        if (!gameHistory.find(function(g) { return g.summary.gameId === gh.summary.gameId; })) {
+          gameHistory.push(gh);
+        }
+      }
+      renderHistory();
+    }
+    scrollLog();
+  }
+
+  function handleEvent(ev, bulk) {
+    switch (ev.type) {
+      case 'state_update': renderState(ev); break;
+      case 'decision': addLogEntry(ev); break;
+      case 'combat_sim': renderCombatSim(ev); addLogEntry(ev); break;
+      case 'market_action': addLogEntry(ev); break;
+      case 'stat_allocation': addLogEntry(ev); break;
+      case 'tx_status': handleTx(ev); addLogEntry(ev); break;
+      case 'game_start': addLogEntry(ev); break;
+      case 'game_summary':
+        if (!gameHistory.find(function(g) { return g.summary.gameId === ev.summary.gameId; })) {
+          gameHistory.push(ev);
+        }
+        renderHistory();
+        addLogEntry(ev);
+        break;
+    }
+    if (!bulk) scrollLog();
+  }
+
+  // ─── Render: State ───
+  function renderState(ev) {
+    var a = ev.adventurer;
+    gameIdEl.textContent = 'Game #' + ev.gameId;
+    levelBadge.textContent = 'L' + a.level;
+
+    // Phase badge
+    phaseBadge.textContent = ev.phase;
+    phaseBadge.className = 'badge phase-badge phase-' + ev.phase;
+
+    // HP bar
+    var pct = a.maxHealth > 0 ? (a.health / a.maxHealth * 100) : 0;
+    hpBar.style.width = pct + '%';
+    hpBar.style.background = pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--yellow)' : 'var(--red)';
+    hpText.textContent = a.health + ' / ' + a.maxHealth;
+
+    // XP, Gold, Upgrades
+    xpVal.textContent = a.xp;
+    goldVal.textContent = a.gold;
+    upgradesVal.textContent = a.statUpgrades || 0;
+
+    // Stats
+    var statNames = ['strength', 'dexterity', 'vitality', 'intelligence', 'wisdom', 'charisma'];
+    var statLabels = ['STR', 'DEX', 'VIT', 'INT', 'WIS', 'CHA'];
+    statsTable.replaceChildren();
+    for (var i = 0; i < statNames.length; i++) {
+      var row = el('div', {className: 'stat-row'}, [
+        el('span', {className: 'stat-label'}, statLabels[i]),
+        el('span', {className: 'stat-value'}, String(a.stats[statNames[i]]))
+      ]);
+      statsTable.appendChild(row);
+    }
+
+    // Equipment
+    var slots = ['weapon', 'chest', 'head', 'waist', 'foot', 'hand', 'neck', 'ring'];
+    equipmentList.replaceChildren();
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i];
+      var item = a.equipment[slot];
+      var slotDiv = el('div', {className: 'equip-slot'});
+      slotDiv.appendChild(el('span', {className: 'slot-label'}, slot));
+
+      if (!item || item.id === 0) {
+        slotDiv.appendChild(el('span', {className: 'item-name empty'}, '(empty)'));
+      } else {
+        slotDiv.appendChild(el('span', {className: 'item-name'}, item.name));
+        slotDiv.appendChild(el('span', {className: 'tier-badge tier-' + item.tier}, 'T' + item.tier));
+
+        var gpct = Math.min(100, (item.greatness / 20) * 100);
+        var gcolor = item.greatness >= 20 ? 'var(--gold)' : item.greatness >= 15 ? 'var(--purple)' : 'var(--blue)';
+        var gbarOuter = el('div', {className: 'greatness-bar', title: 'G' + item.greatness + '/20'});
+        var gbarInner = el('div', {className: 'greatness-fill', style: 'width:' + gpct + '%; background:' + gcolor});
+        gbarOuter.appendChild(gbarInner);
+        slotDiv.appendChild(gbarOuter);
+        slotDiv.appendChild(el('span', {style: 'font-size:10px; color:var(--text-dim);'}, 'G' + item.greatness));
+      }
+      equipmentList.appendChild(slotDiv);
+    }
+
+    // Bag
+    bagList.replaceChildren();
+    if (a.bag && a.bag.length > 0) {
+      for (var i = 0; i < a.bag.length; i++) {
+        var bitem = a.bag[i];
+        var bslotDiv = el('div', {className: 'equip-slot'}, [
+          el('span', {className: 'slot-label'}, bitem.slot),
+          el('span', {className: 'item-name'}, bitem.name),
+          el('span', {className: 'tier-badge tier-' + bitem.tier}, 'T' + bitem.tier),
+          el('span', {style: 'font-size:10px; color:var(--text-dim);'}, 'G' + bitem.greatness)
+        ]);
+        bagList.appendChild(bslotDiv);
+      }
+    } else {
+      bagList.appendChild(el('div', {style: 'color:var(--text-dim); font-size:12px;'}, 'Empty'));
+    }
+
+    // Beast panel
+    if (ev.beast && ev.beast.id > 0 && (ev.phase === 'in_battle' || ev.phase === 'starter_beast')) {
+      renderBeast(ev.beast);
+    } else {
+      beastPanel.classList.add('hidden');
+    }
+  }
+
+  function renderBeast(beast) {
+    beastPanel.classList.remove('hidden');
+    beastPanel.replaceChildren();
+
+    var headerRow = el('div', {style: 'display:flex; justify-content:space-between; align-items:center;'}, [
+      el('span', {className: 'beast-name'}, beast.name),
+      el('span', {className: 'tier-badge tier-' + beast.tier}, 'T' + beast.tier)
+    ]);
+    beastPanel.appendChild(headerRow);
+    beastPanel.appendChild(el('div', {className: 'beast-info'}, 'Level ' + beast.level + ' ' + beast.type + ' \u2014 HP: ' + beast.health));
+    beastPanel.appendChild(el('div', {id: 'combatSimReadout'}));
+  }
+
+  // ─── Render: Combat Sim ───
+  function renderCombatSim(ev) {
+    var readout = document.getElementById('combatSimReadout');
+    if (!readout) return;
+    readout.replaceChildren();
+
+    var grid = el('div', {className: 'sim-grid'});
+    var winColor = ev.winRate >= 0.7 ? 'var(--green)' : ev.winRate >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+
+    function addRow(label, value, extraClass, extraStyle) {
+      grid.appendChild(el('span', {className: 'sim-label'}, label));
+      var valEl = el('span', {className: 'sim-value' + (extraClass ? ' ' + extraClass : '')}, value);
+      if (extraStyle) valEl.style.cssText += extraStyle;
+      grid.appendChild(valEl);
+    }
+
+    addRow('Win Rate', (ev.winRate * 100).toFixed(0) + '%', null, 'color:' + winColor);
+    addRow('Flee', (ev.fleeChance * 100).toFixed(0) + '%');
+    addRow('HP Loss (win)', ev.expectedHpLossOnWin.toFixed(0));
+    addRow('Rounds', ev.expectedRounds.toFixed(1));
+    addRow('Profit', (ev.isProfitable ? 'YES' : 'NO') + ' (' + (ev.netHpCost > 0 ? '+' : '') + ev.netHpCost.toFixed(0) + ' net HP)',
+      ev.isProfitable ? 'sim-profitable' : 'sim-unprofitable');
+    addRow('Kill Gold', ev.killGold + 'g');
+    addRow('Kill XP', String(ev.killXp));
+    addRow('Death Rate', (ev.deathRate * 100).toFixed(0) + '%', null,
+      ev.deathRate > 0.3 ? 'color:var(--red)' : '');
+
+    readout.appendChild(grid);
+  }
+
+  // ─── Log ───
+  function tagFor(ev) {
+    switch (ev.type) {
+      case 'combat_sim': return ['COMBAT', 'tag-combat'];
+      case 'decision':
+        var p = ev.phase;
+        if (p === 'in_battle' || p === 'starter_beast') return ['COMBAT', 'tag-combat'];
+        if (p === 'exploring') return ['EXPLORE', 'tag-explore'];
+        if (p === 'shopping') return ['SHOP', 'tag-shop'];
+        if (p === 'stat_upgrade') return ['STATS', 'tag-stats'];
+        return ['DECIDE', 'tag-game'];
+      case 'market_action': return ['SHOP', 'tag-shop'];
+      case 'stat_allocation': return ['STATS', 'tag-stats'];
+      case 'tx_status':
+        if (ev.status === 'error' || ev.status === 'reverted') return ['TX ERR', 'tag-error'];
+        return ['TX', 'tag-tx'];
+      case 'game_start': return ['GAME', 'tag-game'];
+      case 'game_summary': return ['GAME', 'tag-game'];
+      default: return ['INFO', 'tag-game'];
+    }
+  }
+
+  function msgFor(ev) {
+    switch (ev.type) {
+      case 'decision': return ev.action + ' \u2014 ' + ev.reason;
+      case 'combat_sim':
+        return 'Win: ' + (ev.winRate*100).toFixed(0) + '% | Flee: ' + (ev.fleeChance*100).toFixed(0) + '% | HP Loss: ' + ev.expectedHpLossOnWin.toFixed(0) + ' | ' + (ev.isProfitable ? 'Profitable' : 'Unprofitable');
+      case 'market_action':
+        var parts = [];
+        if (ev.potions > 0) parts.push(ev.potions + ' potions');
+        for (var i = 0; i < ev.items.length; i++) parts.push(ev.items[i].name + ' T' + ev.items[i].tier);
+        return 'Bought: ' + parts.join(', ') + ' (' + ev.totalCost + 'g spent, ' + ev.goldRemaining + 'g left)' + (ev.savingForWeapon ? ' [saving for weapon]' : '');
+      case 'stat_allocation':
+        var a = ev.allocation;
+        var sp = [];
+        if (a.strength) sp.push('+' + a.strength + ' STR');
+        if (a.dexterity) sp.push('+' + a.dexterity + ' DEX');
+        if (a.vitality) sp.push('+' + a.vitality + ' VIT');
+        if (a.intelligence) sp.push('+' + a.intelligence + ' INT');
+        if (a.wisdom) sp.push('+' + a.wisdom + ' WIS');
+        if (a.charisma) sp.push('+' + a.charisma + ' CHA');
+        return ev.points + ' pts: ' + sp.join(', ') + ' (L' + ev.level + ')';
+      case 'tx_status':
+        var msg = '[' + ev.status.toUpperCase() + '] ' + ev.description;
+        if (ev.txHash) msg += ' (' + ev.txHash.slice(0,10) + '...)';
+        if (ev.error) msg += ' \u2014 ' + ev.error.slice(0,80);
+        return msg;
+      case 'game_start':
+        return 'Game #' + ev.gameId + ' started (game ' + ev.gameNumber + ')';
+      case 'game_summary':
+        return 'Game #' + ev.summary.gameId + ' ended \u2014 L' + ev.summary.level + ' XP:' + ev.summary.xp + ' \u2014 ' + ev.summary.causeOfDeath;
+      default:
+        return JSON.stringify(ev).slice(0, 120);
+    }
+  }
+
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function addLogEntry(ev) {
+    var info = tagFor(ev);
+    var div = el('div', {className: 'log-entry'}, [
+      el('span', {className: 'log-ts'}, fmtTime(ev.ts)),
+      el('span', {className: 'log-tag ' + info[1]}, info[0]),
+      el('span', {className: 'log-msg'}, msgFor(ev))
+    ]);
+    logEntries.appendChild(div);
+
+    // Trim old entries
+    while (logEntries.children.length > MAX_LOG_ENTRIES) {
+      logEntries.removeChild(logEntries.firstChild);
+    }
+  }
+
+  function scrollLog() {
+    logEntries.scrollTop = logEntries.scrollHeight;
+  }
+
+  // ─── TX Monitor ───
+  function handleTx(ev) {
+    var existing = null;
+    for (var i = 0; i < txHistory.length; i++) {
+      var t = txHistory[i];
+      if (t.description === ev.description && t.status !== 'confirmed' && t.status !== 'reverted' && t.status !== 'error') {
+        existing = t;
+        break;
+      }
+    }
+    if (existing) {
+      existing.status = ev.status;
+      if (ev.txHash) existing.txHash = ev.txHash;
+      if (ev.error) existing.error = ev.error;
+      existing.ts = ev.ts;
+    } else {
+      txHistory.unshift(Object.assign({}, ev));
+      if (txHistory.length > MAX_TX_ENTRIES) txHistory.pop();
+    }
+    renderTxList();
+  }
+
+  function renderTxList() {
+    txListEl.replaceChildren();
+    for (var i = 0; i < txHistory.length; i++) {
+      var tx = txHistory[i];
+      var entry = el('div', {className: 'tx-entry'});
+
+      var headerRow = el('div', {style: 'display:flex; justify-content:space-between; align-items:center;'});
+      headerRow.appendChild(el('span', {className: 'tx-status-badge tx-' + tx.status}, tx.status.toUpperCase()));
+      if (tx.txHash) {
+        var link = el('a', {
+          className: 'tx-hash',
+          href: 'https://starkscan.co/tx/' + tx.txHash,
+          target: '_blank'
+        }, tx.txHash.slice(0,10) + '...' + tx.txHash.slice(-6));
+        headerRow.appendChild(link);
+      }
+      entry.appendChild(headerRow);
+      entry.appendChild(el('div', {className: 'tx-desc'}, tx.description));
+      if (tx.error) {
+        entry.appendChild(el('div', {style: 'color:var(--red); font-size:11px; margin-top:2px;'}, tx.error.slice(0,100)));
+      }
+      txListEl.appendChild(entry);
+    }
+  }
+
+  // ─── Game History ───
+  function renderHistory() {
+    historyContent.replaceChildren();
+    if (gameHistory.length === 0) {
+      historyContent.appendChild(el('div', {style: 'color:var(--text-dim); font-size:12px; padding:6px 0;'}, 'No games completed yet.'));
+      return;
+    }
+
+    var table = el('table', {className: 'history-table'});
+    var thead = el('thead');
+    var headRow = el('tr');
+    ['Game ID', 'Level', 'XP', 'Gold', 'Death Cause'].forEach(function(h) {
+      headRow.appendChild(el('th', null, h));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    for (var i = 0; i < gameHistory.length; i++) {
+      var s = gameHistory[i].summary;
+      var row = el('tr', null, [
+        el('td', null, String(s.gameId)),
+        el('td', null, 'L' + s.level),
+        el('td', {className: 'xp'}, String(s.xp)),
+        el('td', {className: 'gold'}, String(s.gold)),
+        el('td', null, s.causeOfDeath)
+      ]);
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    historyContent.appendChild(table);
+
+    var avgLevel = (gameHistory.reduce(function(sum, g) { return sum + g.summary.level; }, 0) / gameHistory.length).toFixed(1);
+    var bestLevel = Math.max.apply(null, gameHistory.map(function(g) { return g.summary.level; }));
+    var bestXP = Math.max.apply(null, gameHistory.map(function(g) { return g.summary.xp; }));
+
+    var summaryDiv = el('div', {className: 'history-summary'});
+    summaryDiv.appendChild(el('span', null, String(gameHistory.length)));
+    summaryDiv.appendChild(document.createTextNode(' games played | Avg level: '));
+    summaryDiv.appendChild(el('span', null, avgLevel));
+    summaryDiv.appendChild(document.createTextNode(' | Best: '));
+    summaryDiv.appendChild(el('span', null, 'L' + bestLevel));
+    summaryDiv.appendChild(document.createTextNode(' (XP: '));
+    summaryDiv.appendChild(el('span', null, String(bestXP)));
+    summaryDiv.appendChild(document.createTextNode(')'));
+    historyContent.appendChild(summaryDiv);
+  }
+
+  // ─── Connect ───
+  connect();
+})();
+</script>
+</body>
+</html>

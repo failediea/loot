@@ -4,6 +4,7 @@ import { MINIMUM_XP_REWARD, XP_REWARD_DIVISOR, MAX_XP_DECAY, POTION_HEAL_AMOUNT 
 import { getBeastTier } from "../utils/beast-utils.js";
 import { log } from "../utils/logger.js";
 import { simulateCombat, simulateFlee } from "./combat-sim.js";
+import { dashboard } from "../dashboard/events.js";
 
 interface CombatDecision {
   action: CombatAction;
@@ -125,6 +126,30 @@ export function decideCombat(adventurer: Adventurer, beast: Beast): CombatDecisi
     `deathRate=${(fleeSim.fleeDeathRate * 100).toFixed(0)}% | ` +
     `Profit: ${isProfitable ? "YES" : "NO"} (netHpCost=${netHpCost.toFixed(0)}, gold=${killGold})`
   );
+
+  dashboard.emitCombatSim({
+    beast: {
+      id: beast.id,
+      name: beast.name || `Beast #${beast.id}`,
+      type: beast.type || "Unknown",
+      tier,
+      level: beast.level,
+      health: beast.health,
+      specials: beast.specials,
+    },
+    winRate: combatSim.winRate,
+    expectedHpLoss: combatSim.expectedHpLoss,
+    expectedHpLossOnWin: combatSim.expectedHpLossOnWin,
+    expectedRounds: combatSim.expectedRounds,
+    deathRate: combatSim.deathRate,
+    fleeChance: fleeProb,
+    fleeDeathRate: fleeSim.fleeDeathRate,
+    fleeExpectedHpLoss: fleeSim.expectedHpLoss,
+    isProfitable,
+    netHpCost,
+    killGold,
+    killXp,
+  });
 
   // ── 4. Guaranteed kill (winRate > 0.99) — always TTD ──
   // At 99%+ win rate, re-evaluating each round adds nothing (same decision every time).

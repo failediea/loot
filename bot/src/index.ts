@@ -1,12 +1,45 @@
 import { loadConfig } from "./config.js";
 import { createProvider } from "./chain/provider.js";
 import { createCallBuilders } from "./chain/calls.js";
-import { installSessionInterceptor } from "./chain/session.js";
+import { installSessionInterceptor, type SessionCredentials, DEFAULT_CREDENTIALS } from "./chain/session.js";
 import { fetchGameState } from "./chain/state.js";
 import { resumeGame } from "./game/loop.js";
 import { buyGame, startGame } from "./game/lifecycle.js";
 import { log } from "./utils/logger.js";
 import type { GameSummary } from "./types.js";
+import { startDashboard } from "./dashboard/server.js";
+import { dashboard } from "./dashboard/events.js";
+
+export interface PlayGameOptions {
+  mode: 'new' | 'resume';
+  gameId?: number;
+  botName?: string;
+}
+
+export async function playGame(
+  creds: SessionCredentials,
+  options: PlayGameOptions,
+): Promise<GameSummary | null> {
+  installSessionInterceptor(creds);
+
+  const config = loadConfig(creds.controller);
+  const provider = createProvider(config);
+  const calls = createCallBuilders(config);
+
+  let gameId: number;
+
+  if (options.mode === 'new') {
+    gameId = await buyGame(config, calls, provider, options.botName || 'BOT');
+    await startGame(config, gameId, calls);
+  } else {
+    gameId = options.gameId!;
+    const state = await fetchGameState(provider, config, gameId);
+    if (!state || state.adventurer.health === 0) return null;
+  }
+
+  dashboard.emitGameStart(gameId, 1);
+  return resumeGame(provider, config, calls, gameId);
+}
 
 const DEFAULT_LOOP_DELAY_SECONDS = 5;
 
@@ -51,6 +84,7 @@ async function main() {
   let loopMode = false;
   let botName = "BOT";
   let loopDelay = DEFAULT_LOOP_DELAY_SECONDS;
+  let dashboardPort = 8080;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--resume" && args[i + 1]) {
@@ -68,6 +102,10 @@ async function main() {
       loopDelay = parseInt(args[i + 1]);
       if (isNaN(loopDelay) || loopDelay < 0) loopDelay = DEFAULT_LOOP_DELAY_SECONDS;
       i++;
+    } else if (args[i] === "--dashboard-port" && args[i + 1]) {
+      dashboardPort = parseInt(args[i + 1]);
+      if (isNaN(dashboardPort) || dashboardPort < 1) dashboardPort = 8080;
+      i++;
     }
   }
 
@@ -83,6 +121,9 @@ async function main() {
     log.error("  --name <name>    Adventurer name (default: BOT)");
     process.exit(1);
   }
+
+  // Start dashboard server
+  await startDashboard(dashboardPort);
 
   // Load config
   const config = loadConfig();
@@ -116,11 +157,13 @@ async function main() {
         log.death(`Game ${resumeGameId} is already dead, skipping to new game`);
       } else {
         log.info(`Game ${resumeGameId}: HP=${state.adventurer.health} XP=${state.adventurer.xp} Gold=${state.adventurer.gold}`);
+        dashboard.emitGameStart(resumeGameId, gameNumber);
         const summary = await resumeGame(provider, config, calls, resumeGameId);
         if (summary) {
           summaries.push(summary);
           logGameSummary(summary, gameNumber);
           logCumulativeStats(summaries);
+          dashboard.emitGameSummary(summary, gameNumber);
         }
       }
     }
@@ -134,6 +177,7 @@ async function main() {
       try {
         gameId = await buyGame(config, calls, provider, botName);
         log.success(`Game purchased: ${gameId}`);
+        dashboard.emitGameStart(gameId, gameNumber);
       } catch (error: any) {
         const msg = error?.message || String(error);
         if (
@@ -181,6 +225,7 @@ async function main() {
           summaries.push(summary);
           logGameSummary(summary, gameNumber);
           logCumulativeStats(summaries);
+          dashboard.emitGameSummary(summary, gameNumber);
         }
       } catch (error: any) {
         log.error(`Game ${gameId} ended with error: ${error?.message?.slice(0, 200)}`);
@@ -218,8 +263,13 @@ async function main() {
       log.info(`Game ${gameId}: HP=${state.adventurer.health} XP=${state.adventurer.xp} Gold=${state.adventurer.gold}`);
     }
 
+    dashboard.emitGameStart(gameId, 1);
+
     // Play!
-    await resumeGame(provider, config, calls, gameId);
+    const summary = await resumeGame(provider, config, calls, gameId);
+    if (summary) {
+      dashboard.emitGameSummary(summary, 1);
+    }
 
     log.info("Bot finished.");
   }

@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  /* Deep atmospheric backgrounds */
+  --color-bg: #06090f;
+  --color-bg2: #0c1118;
+  --color-bg3: #151c28;
+  --color-surface: #1a2232;
+  --color-border: #1c2840;
+  --color-border-bright: #2d3f5c;
+
+  /* Warm parchment text */
+  --color-text: #b8ad98;
+  --color-text-dim: #6d6354;
+  --color-text-bright: #ede4d4;
+
+  /* Fantasy accent palette */
+  --color-green: #10b981;
+  --color-red: #ef4444;
+  --color-yellow: #eab308;
+  --color-blue: #60a5fa;
+  --color-purple: #a78bfa;
+  --color-gold: #d4a020;
+  --color-amber: #f59e0b;
+  --color-cyan: #22d3ee;
+  --color-orange: #f97316;
+
+  /* Typography */
+  --font-display: 'Cinzel', 'Georgia', serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+body {
+  font-family: var(--font-mono);
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-border-bright); }
+
+/* Animations */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes health-critical {
+  0%, 100% { box-shadow: 0 0 8px rgba(239, 68, 68, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.5); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes ember-rise {
+  0% { opacity: 0; transform: translateY(10px) scale(0.8); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-60px) scale(0.3); }
+}
+
+.animate-fade-in { animation: fade-in 0.3s ease-out both; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-health-critical { animation: health-critical 1.5s ease-in-out infinite; }
+.animate-float { animation: float 6s ease-in-out infinite; }
+
+/* Staggered delays for lists */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.10s; }
+.stagger-3 { animation-delay: 0.15s; }
+
+/* Noise texture overlay */
+.noise::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.015;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  z-index: 9999;
+}
+
+/* Glow utilities */
+.glow-amber { box-shadow: 0 0 20px rgba(245, 158, 11, 0.15), 0 0 60px rgba(245, 158, 11, 0.05); }
+.glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.15), 0 0 60px rgba(16, 185, 129, 0.05); }
+.glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15), 0 0 60px rgba(239, 68, 68, 0.05); }
+.glow-blue { box-shadow: 0 0 20px rgba(96, 165, 250, 0.15), 0 0 60px rgba(96, 165, 250, 0.05); }
+
+/* Card pattern */
+.card {
+  background: linear-gradient(180deg, var(--color-bg3) 0%, var(--color-bg2) 100%);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.card-hover {
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.card-hover:hover {
+  border-color: var(--color-border-bright);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Section divider */
+.section-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-bright), transparent);
+}
+
+/* Text glow for display font */
+.text-glow-amber {
+  text-shadow: 0 0 30px rgba(245, 158, 11, 0.3), 0 0 60px rgba(245, 158, 11, 0.1);
+}
+
+.text-glow-red {
+  text-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+}
