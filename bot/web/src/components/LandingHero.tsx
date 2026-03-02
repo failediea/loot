@@ -6,8 +6,6 @@ interface Props {
   onConnect: () => void;
 }
 
-const COST_PER_GAME = 18;
-
 export function LandingHero({ onConnect }: Props) {
   const [gamePriceUsd, setGamePriceUsd] = useState<string | null>(null);
 
@@ -15,8 +13,8 @@ export function LandingHero({ onConnect }: Props) {
     fetch("/api/price/strk")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data?.strkUsd) {
-          const usd = COST_PER_GAME * data.strkUsd;
+        if (data?.ticketUsd) {
+          const usd = data.ticketUsd;
           setGamePriceUsd(usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`);
         }
       })

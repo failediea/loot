@@ -17,8 +17,6 @@ interface Props {
   onGameStarted: (queueId: number, gameRequestId: number) => void;
 }
 
-const COST_PER_GAME = 18;
-
 export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
   const { user, username } = useAuth();
   const [count, setCount] = useState(1);
@@ -26,15 +24,16 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [settingUpSession, setSettingUpSession] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
+  const [ticketUsd, setTicketUsd] = useState<number | null>(null);
   const [strkUsd, setStrkUsd] = useState<number | null>(null);
 
   const needsSession = !sessionStatus?.hasSession ||
     (sessionStatus.expiresAt != null && sessionStatus.expiresAt < Date.now() / 1000);
 
-  // Fetch STRK balance and USD price
+  // Fetch STRK balance and live prices from Ekubo
   useEffect(() => {
     if (user) fetchBalance();
-    fetchStrkPrice();
+    fetchPrices();
   }, [user]);
 
   const fetchBalance = async () => {
@@ -47,12 +46,13 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
     } catch {}
   };
 
-  const fetchStrkPrice = async () => {
+  const fetchPrices = async () => {
     try {
       const res = await fetch("/api/price/strk");
       if (res.ok) {
         const data = await res.json();
-        setStrkUsd(data.strkUsd);
+        if (data.ticketUsd) setTicketUsd(data.ticketUsd);
+        if (data.strkUsd) setStrkUsd(data.strkUsd);
       }
     } catch {}
   };
@@ -136,10 +136,6 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
     ? "Play Game"
     : `Play ${count} Games`;
 
-  const estimatedCost = count * COST_PER_GAME;
-  const gamePriceUsd = strkUsd !== null ? (COST_PER_GAME * strkUsd) : null;
-  const totalPriceUsd = strkUsd !== null ? (estimatedCost * strkUsd) : null;
-
   const formatUsd = (v: number) => v < 0.01 ? "<$0.01" : `$${v.toFixed(2)}`;
 
   return (
@@ -155,11 +151,9 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
         <p className="text-text-dim text-[11px]">
           Game Price:{" "}
           <span className="text-text font-semibold">
-            {gamePriceUsd !== null ? formatUsd(gamePriceUsd) : `~${COST_PER_GAME} STRK`}
+            {ticketUsd !== null ? formatUsd(ticketUsd) : "..."}
           </span>
-          {gamePriceUsd !== null && (
-            <span className="text-text-dim"> ({COST_PER_GAME} STRK)</span>
-          )}
+          <span className="text-text-dim"> &middot; pay with any token</span>
         </p>
       </div>
 
@@ -174,9 +168,9 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
           onChange={(e) => handleCountChange(e.target.value)}
           className="w-20 h-12 rounded-lg text-center text-lg font-bold bg-bg3/80 text-amber border-2 border-border focus:border-amber/50 focus:outline-none transition-colors appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
-        {!user?.isOwner && (
+        {!user?.isOwner && ticketUsd !== null && (
           <span className="text-xs text-text-dim">
-            {totalPriceUsd !== null ? formatUsd(totalPriceUsd) : `≈ ${estimatedCost} STRK`}
+            {formatUsd(count * ticketUsd)}
           </span>
         )}
       </div>
