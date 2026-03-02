@@ -1,10 +1,28 @@
 "use client";
 
+import { useState, useEffect } from "react";
+
 interface Props {
   onConnect: () => void;
 }
 
+const COST_PER_GAME = 18;
+
 export function LandingHero({ onConnect }: Props) {
+  const [gamePriceUsd, setGamePriceUsd] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/price/strk")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.strkUsd) {
+          const usd = COST_PER_GAME * data.strkUsd;
+          setGamePriceUsd(usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
       {/* Atmospheric background */}
@@ -67,7 +85,7 @@ export function LandingHero({ onConnect }: Props) {
           </div>
           <div className="grid grid-cols-3 gap-6 text-center">
             <StepItem step="1" label="Connect" description="Cartridge wallet" />
-            <StepItem step="2" label="Fund" description="~18 STRK per game" />
+            <StepItem step="2" label="Fund" description={gamePriceUsd ? `${gamePriceUsd} per game` : "~18 STRK per game"} />
             <StepItem step="3" label="Watch" description="Live dashboard" />
           </div>
         </div>

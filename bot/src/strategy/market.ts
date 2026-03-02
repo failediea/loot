@@ -245,11 +245,13 @@ export function decideMarketPurchases(
   if (weaponUpgrades.length > 0) {
     const bestWeapon = weaponUpgrades[0];
 
-    // Greatness guard: don't replace weapon near G15 unless 2+ tier improvement
-    const weaponBlocked = currentWeapon.id > 0 &&
-      shouldBlockReplacement(currentWeapon.id, currentWeapon.xp, bestWeapon.tier, "Weapon");
-
-    if (!weaponBlocked) {
+    // Weapons are EXEMPT from shouldBlockReplacement — damage tier is king.
+    // A T1 weapon does 5x damage vs T5 = 1x. The tier upgrade pays for itself
+    // immediately through higher kill rate and gold income. Even a G18 T5 weapon
+    // (damage = 1*18 = 18) is far worse than a G1 T1 weapon (damage = 5*1 = 5
+    // that will quickly grow). Armor items ride to G20 because armor grows
+    // linearly, but weapon TIER is the dominant damage factor.
+    {
       // Weapons are the #1 purchase: the damage increase pays for itself
       // by killing beasts (gold income) and finishing fights faster (less HP lost).
       // Use minimal gold reserve — weapon ROI is immediate.

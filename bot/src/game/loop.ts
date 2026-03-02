@@ -224,6 +224,7 @@ async function playGameLoop(
         "not in battle", "action not allowed",
         "stat points required", "inventory full",
         "argent/multicall-failed",
+        "transaction reverted",
       ];
       if (staleStateErrors.some(p => msgLower.includes(p))) {
         log.warn(`Likely stale state (${msg.slice(0, 120)}), re-fetching and retrying`);

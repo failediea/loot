@@ -26,13 +26,15 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [settingUpSession, setSettingUpSession] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
+  const [strkUsd, setStrkUsd] = useState<number | null>(null);
 
   const needsSession = !sessionStatus?.hasSession ||
     (sessionStatus.expiresAt != null && sessionStatus.expiresAt < Date.now() / 1000);
 
-  // Fetch STRK balance
+  // Fetch STRK balance and USD price
   useEffect(() => {
     if (user) fetchBalance();
+    fetchStrkPrice();
   }, [user]);
 
   const fetchBalance = async () => {
@@ -41,6 +43,16 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
       if (res.ok) {
         const data = await res.json();
         setBalance(data.balanceFormatted);
+      }
+    } catch {}
+  };
+
+  const fetchStrkPrice = async () => {
+    try {
+      const res = await fetch("/api/price/strk");
+      if (res.ok) {
+        const data = await res.json();
+        setStrkUsd(data.strkUsd);
       }
     } catch {}
   };
@@ -125,6 +137,10 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
     : `Play ${count} Games`;
 
   const estimatedCost = count * COST_PER_GAME;
+  const gamePriceUsd = strkUsd !== null ? (COST_PER_GAME * strkUsd) : null;
+  const totalPriceUsd = strkUsd !== null ? (estimatedCost * strkUsd) : null;
+
+  const formatUsd = (v: number) => v < 0.01 ? "<$0.01" : `$${v.toFixed(2)}`;
 
   return (
     <div className="card p-6 relative overflow-hidden">
@@ -137,7 +153,13 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
           Deploy Your Adventurer
         </h2>
         <p className="text-text-dim text-[11px]">
-          Each run costs ~{COST_PER_GAME} STRK for the on-chain game ticket
+          Game Price:{" "}
+          <span className="text-text font-semibold">
+            {gamePriceUsd !== null ? formatUsd(gamePriceUsd) : `~${COST_PER_GAME} STRK`}
+          </span>
+          {gamePriceUsd !== null && (
+            <span className="text-text-dim"> ({COST_PER_GAME} STRK)</span>
+          )}
         </p>
       </div>
 
@@ -154,7 +176,7 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
         />
         {!user?.isOwner && (
           <span className="text-xs text-text-dim">
-            &asymp; {estimatedCost} STRK
+            {totalPriceUsd !== null ? formatUsd(totalPriceUsd) : `≈ ${estimatedCost} STRK`}
           </span>
         )}
       </div>
@@ -177,7 +199,12 @@ export function PlayControls({ sessionStatus, queue, onGameStarted }: Props) {
         )}
         {balance !== null && (
           <span className="text-[10px] text-text-dim">
-            Balance: <span className="text-text font-semibold">{parseFloat(balance).toFixed(1)} STRK</span>
+            Balance:{" "}
+            <span className="text-text font-semibold">
+              {strkUsd !== null
+                ? `${formatUsd(parseFloat(balance) * strkUsd)} (${parseFloat(balance).toFixed(1)} STRK)`
+                : `${parseFloat(balance).toFixed(1)} STRK`}
+            </span>
           </span>
         )}
       </div>
